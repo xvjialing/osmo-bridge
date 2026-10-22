@@ -6,6 +6,7 @@ import {
   type LogInfo,
   type LogEntry,
   type LogSettings,
+  type WiFiCandidate,
 } from "./bridge";
 
 // 仅由 test 构建加载；数据和动作都是显式标记的本地测试夹具。
@@ -17,7 +18,11 @@ const state: State = {
   media: [],
   tasks: [],
 };
-if (scenario !== "disconnected" && scenario !== "error") {
+if (
+  scenario !== "disconnected" &&
+  scenario !== "error" &&
+  !scenario?.startsWith("wifi-")
+) {
   state.phase = "connected";
   state.deviceName = "Action 6 · 虚拟设备";
   state.ssid = "TEST-OSMO";
@@ -82,6 +87,56 @@ if (scenario === "waiting-wifi" || scenario === "connection-error") {
       ? "自动认证未完成，请在系统 Wi-Fi 菜单手动加入相机热点"
       : "热点已就绪，素材握手未响应";
 }
+
+const rememberedNetworks = new Set<string>(
+  scenario === "wifi-saved" ? ["TEST-OsmoAction6-ABCD"] : [],
+);
+let connectionGeneration = 0;
+function fixtureNetworks(): WiFiCandidate[] {
+  if (scenario === "wifi-empty") return [];
+  return [
+    {
+      ssid: "TEST-OsmoAction6-ABCD",
+      rssi: -38,
+      channel: 149,
+      security: "WPA2",
+      supported: true,
+      likely: true,
+      reason: "与相机蓝牙提供的热点名称一致",
+      hasSavedPassword: rememberedNetworks.has("TEST-OsmoAction6-ABCD"),
+    },
+    {
+      ssid: "TEST-OsmoAction-另一台相机",
+      rssi: -69,
+      channel: 36,
+      security: "WPA2",
+      supported: true,
+      likely: true,
+      reason: "名称包含 Osmo / DJI，需由你确认",
+      hasSavedPassword: false,
+    },
+    {
+      ssid: "TEST-改名后的相机热点",
+      rssi: -52,
+      channel: 6,
+      security: "WPA2",
+      supported: true,
+      likely: false,
+      reason: "其他附近热点，请核对相机无线信息",
+      hasSavedPassword: false,
+    },
+    {
+      ssid: "TEST-开放网络",
+      rssi: -56,
+      channel: 11,
+      security: "开放网络",
+      supported: false,
+      likely: false,
+      reason: "其他附近热点，请核对相机无线信息",
+      hasSavedPassword: false,
+    },
+  ];
+}
 export async function fixtureCall(method: Method, args: unknown[]) {
   if (method === "GetLogInfo") return structuredClone(logInfo);
   if (method === "ReadLogs") {
@@ -144,34 +199,64 @@ export async function fixtureCall(method: Method, args: unknown[]) {
       throw new Error("测试错误：蓝牙权限未开启，请在系统设置中允许访问");
     return [{ id: "test-camera", name: "Action 6 · 虚拟设备", rssi: -42 }];
   }
-  if (method === "Connect") {
-    if (
-      (scenario === "waiting-wifi" || scenario === "connection-error") &&
-      args[1]
-    ) {
-      state.phase = "connecting";
-      state.busy = true;
-      state.message = "测试：等待网络地址就绪";
-      setTimeout(() => {
-        state.phase = "connected";
-        state.busy = false;
-        state.message = "测试：已建立素材会话";
-      }, 300);
-      return;
-    }
+  if (method === "PrepareCamera" || method === "ScanWiFi") {
+    const generation = ++connectionGeneration;
+    state.phase = method === "PrepareCamera" ? "preparing" : "choosing_wifi";
+    state.busy = true;
+    state.message = "测试：正在配对并扫描热点（不会切换 Wi-Fi）";
+    state.wifiNetworks = [];
+    state.deviceName = "Action 6 · 虚拟设备";
+    state.ssid = "TEST-OsmoAction6-ABCD";
+    setTimeout(() => {
+      if (generation !== connectionGeneration) return;
+      state.phase = "choosing_wifi";
+      state.busy = false;
+      state.wifiNetworks =
+        scenario === "wifi-scan-error" ? [] : fixtureNetworks();
+      state.message =
+        scenario === "wifi-scan-error"
+          ? "测试：扫描热点失败，请允许定位服务后重试"
+          : "请选择相机热点，确认后才会切换 Wi-Fi";
+    }, 400);
+    return;
+  }
+  if (method === "ForgetWiFiPassword") {
+    rememberedNetworks.delete(args[0] as string);
+    state.wifiNetworks = fixtureNetworks();
+    return;
+  }
+  if (method === "JoinCameraWiFi" || method === "Connect") {
+    const generation = ++connectionGeneration;
     state.phase = "connecting";
     state.busy = true;
-    state.message = "测试：等待相机确认";
+    state.message = "测试：正在认证热点并等待网络地址";
+    if (method === "JoinCameraWiFi") state.ssid = args[0] as string;
     setTimeout(() => {
-      state.phase = "disconnected";
+      if (generation !== connectionGeneration) return;
       state.busy = false;
-      state.message = "测试错误：相机未响应，可重试连接";
-    }, 700);
+      if (method === "JoinCameraWiFi" && args[1] === "FixtureWrong42") {
+        state.phase = "waiting_wifi";
+        state.message = "测试：热点认证失败，请核对密码";
+        return;
+      }
+      if (method === "JoinCameraWiFi" && args[3]) {
+        rememberedNetworks.add(args[0] as string);
+        state.wifiNetworks = fixtureNetworks();
+      }
+      state.phase = "connected";
+      state.message = "测试：已建立素材会话";
+    }, 400);
     return;
   }
   if (method === "Disconnect") {
+    connectionGeneration++;
     state.phase = "disconnected";
+    state.busy = false;
     state.media = [];
+    state.wifiNetworks = [];
+    state.deviceName = "";
+    state.ssid = "";
+    state.message = "相机已断开";
     return;
   }
   if (method === "Refresh") return;

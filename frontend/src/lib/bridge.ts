@@ -22,8 +22,14 @@ export interface Task {
   sha256: string;
 }
 export interface WiFiCandidate {
-  ssid: string; rssi: number; channel: number; security: string; supported: boolean;
-  likely: boolean; reason: string; hasSavedPassword: boolean;
+  ssid: string;
+  rssi: number;
+  channel: number;
+  security: string;
+  supported: boolean;
+  likely: boolean;
+  reason: string;
+  hasSavedPassword: boolean;
 }
 export interface State {
   wifiNetworks: WiFiCandidate[];

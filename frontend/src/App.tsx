@@ -175,9 +175,13 @@ export default function App() {
     setHelpOpen(true);
   }
   const connected = state.phase === "connected";
-  const connecting = state.phase === "connecting" || state.phase === "preparing";
-  const pendingConnection =
-    ["choosing_wifi", "waiting_wifi", "connection_error"].includes(state.phase);
+  const connecting =
+    state.phase === "connecting" || state.phase === "preparing";
+  const pendingConnection = [
+    "choosing_wifi",
+    "waiting_wifi",
+    "connection_error",
+  ].includes(state.phase);
   const busy = Boolean(action) || state.busy;
   const completed = state.tasks.filter((t) => t.status === "completed");
   const active = state.tasks.filter((t) => t.status !== "completed");
@@ -903,11 +907,21 @@ export default function App() {
           </div>
         </DialogContent>
       </Dialog>
-      <ConnectionDialog open={connectionOpen} onOpenChange={setConnectionOpen} state={state} returnFocus={returnFocus} onState={(next) => {
-        setState(next);
-        if (next.phase === "connecting") previousPhase.current = "connecting";
-        if (next.phase === "connected") { setConnectionOpen(false); setSelection(new Set()); setFeedback("相机已连接，可以选择素材导入"); }
-      }} />
+      <ConnectionDialog
+        open={connectionOpen}
+        onOpenChange={setConnectionOpen}
+        state={state}
+        returnFocus={returnFocus}
+        onState={(next) => {
+          setState(next);
+          if (next.phase === "connecting") previousPhase.current = "connecting";
+          if (next.phase === "connected") {
+            setConnectionOpen(false);
+            setSelection(new Set());
+            setFeedback("相机已连接，可以选择素材导入");
+          }
+        }}
+      />
       <Dialog open={helpOpen} onOpenChange={setHelpOpen}>
         <DialogContent
           onCloseAutoFocus={(e) => {
@@ -926,8 +940,10 @@ export default function App() {
             <li>在 macOS 系统设置中允许映桥使用蓝牙和本地网络。</li>
             <li>点击搜索，选中相机，并在相机屏幕上确认 OSMO 配对。</li>
             <li>
-              在扫描出的 Wi-Fi 列表中选定相机热点，输入相机「系统设置 → 无线连接 → 无线信息」中的密码。
-              勾选记住后，认证成功会存入本机钥匙串，下次可直接使用。也可通过系统 Wi-Fi 菜单连接后接续。
+              在扫描出的 Wi-Fi 列表中选定相机热点，输入相机「系统设置 → 无线连接
+              → 无线信息」中的密码。
+              勾选记住后，认证成功会存入本机钥匙串，下次可直接使用。也可通过系统
+              Wi-Fi 菜单连接后接续。
             </li>
           </ol>
           <p className="text-xs muted mt-3">

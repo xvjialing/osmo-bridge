@@ -9,6 +9,7 @@ import * as camera$0 from "./internal/camera/models.js";
 import * as transfer$0 from "./internal/transfer/models.js";
 
 export interface State {
+    "wifiNetworks": WiFiCandidate[] | null;
     "phase": string;
     "message": string;
     "warning": string;
@@ -30,4 +31,15 @@ export interface Task {
     "error": string;
     "path": string;
     "sha256": string;
+}
+
+export interface WiFiCandidate {
+    "ssid": string;
+    "rssi": number;
+    "channel": number;
+    "security": string;
+    "supported": boolean;
+    "likely": boolean;
+    "reason": string;
+    "hasSavedPassword": boolean;
 }

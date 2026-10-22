@@ -24,6 +24,9 @@ export function CleanLogs(all: boolean): $CancellablePromise<diagnostics$0.Clean
     return $Call.ByName("main.BridgeService.CleanLogs", all);
 }
 
+/**
+ * 保留系统 Wi-Fi 菜单的手动接续入口；非手动调用只准备热点选择。
+ */
 export function Connect(id: string, manual: boolean): $CancellablePromise<void> {
     return $Call.ByName("main.BridgeService.Connect", id, manual);
 }
@@ -43,6 +46,10 @@ export function ExportLogs(): $CancellablePromise<string> {
     return $Call.ByName("main.BridgeService.ExportLogs");
 }
 
+export function ForgetWiFiPassword(ssid: string): $CancellablePromise<void> {
+    return $Call.ByName("main.BridgeService.ForgetWiFiPassword", ssid);
+}
+
 export function GetLogInfo(): $CancellablePromise<diagnostics$0.Info> {
     return $Call.ByName("main.BridgeService.GetLogInfo");
 }
@@ -51,12 +58,23 @@ export function GetState(): $CancellablePromise<$models.State> {
     return $Call.ByName("main.BridgeService.GetState");
 }
 
+export function JoinCameraWiFi(ssid: string, password: string, useSaved: boolean, remember: boolean): $CancellablePromise<void> {
+    return $Call.ByName("main.BridgeService.JoinCameraWiFi", ssid, password, useSaved, remember);
+}
+
 export function OpenLogDirectory(): $CancellablePromise<void> {
     return $Call.ByName("main.BridgeService.OpenLogDirectory");
 }
 
 export function PauseAll(): $CancellablePromise<void> {
     return $Call.ByName("main.BridgeService.PauseAll");
+}
+
+/**
+ * 蓝牙只负责配对及唤醒热点；此方法绝不切换 Wi-Fi。
+ */
+export function PrepareCamera(id: string): $CancellablePromise<void> {
+    return $Call.ByName("main.BridgeService.PrepareCamera", id);
 }
 
 export function ReadLogs(q: diagnostics$0.Query): $CancellablePromise<diagnostics$0.Page> {
@@ -81,4 +99,8 @@ export function SaveLogSettings(settings: diagnostics$0.Settings): $CancellableP
 
 export function Scan(): $CancellablePromise<camera$0.Device[] | null> {
     return $Call.ByName("main.BridgeService.Scan");
+}
+
+export function ScanWiFi(): $CancellablePromise<void> {
+    return $Call.ByName("main.BridgeService.ScanWiFi");
 }

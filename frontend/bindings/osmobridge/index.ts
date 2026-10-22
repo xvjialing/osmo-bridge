@@ -8,5 +8,6 @@ export {
 
 export type {
     State,
-    Task
+    Task,
+    WiFiCandidate
 } from "./models.js";

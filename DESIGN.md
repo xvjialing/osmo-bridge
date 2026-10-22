@@ -64,13 +64,15 @@ components:
 
 唯一矢量源为 `assets/brand/logo.svg`。1024px 画布中的底板为 832px，保留透明外边距，与其他 macOS Dock 图标的视觉尺寸一致。`scripts/generate-icons.mjs` 自动输出 PNG、16–1024px iconset、ICNS 和前端标识，禁止分别手改生成文件。
 
-运行时由 Wails `Options.Icon` 读取内嵌 PNG，因此 `go run`/dev 也有 Dock 图标；打包同时使用 `CFBundleIconFile` 引用 ICNS，使 Finder 和启动台可识别图标。界面左上角同步采用同一标识。现有页面色彩与控件行为不变。
+运行时由 Wails `Options.Icon` 读取内嵌 PNG，因此直接运行也有 Dock 图标；dev 和发布均构建 app bundle，以正确承载系统权限，同时使用 `CFBundleIconFile` 引用 ICNS，使 Finder 和启动台可识别图标。界面左上角同步采用同一标识。
 
 ## Components
 
 共享控件位于 components/ui，采用 shadcn/ui。按钮明确 hover、focus-visible、disabled、busy，忙碌时宽度不变。弹窗有标题、描述、焦点管理和 Escape 行为。状态由文字和图标共同表达。滚动条全局定义 thumb、track、hover、active 和 forced-colors。动画仅用于连接或传输状态，遵循 reduced-motion。
 
 ## Do's and Don'ts
+
+连接向导沿用共享 Dialog、Button、Input、Checkbox，最多 560px 宽，高度不足时内部滚动。顶部三步细线进度明确当前阶段；热点名称可换行，辅助信息分层，并用文字说明匹配依据。密码框与独立显示按钮并列，记忆状态使用图标和文字，不显示密码占位值。系统菜单接续默认收起，保留焦点恢复、错误及忙碌状态规范。
 
 - 显示真实连接和下载状态，未连接时给出连接步骤。
 - 相机不可用和无素材是不同状态；错误保留重试入口。
