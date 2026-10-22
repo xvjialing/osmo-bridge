@@ -468,15 +468,18 @@ export function ConnectionDialog({
         {!state.busy &&
           ["waiting_wifi", "connection_error"].includes(state.phase) && (
             <div className="notice error" role="alert">
-              {state.message}。蓝牙会话已保留，可修改密码或重试。
+              {state.message}。
+              {state.wifiNetworks.length > 0
+                ? "蓝牙会话已保留，可修改密码或重试。"
+                : "当前连接信息已保留，可检查热点后重试。"}
             </div>
           )}
         {!state.busy &&
           state.phase === "choosing_wifi" &&
           state.message !== "请选择相机热点，确认后才会切换 Wi-Fi" && (
-            <p role="status" className="text-sm muted">
+            <div role="alert" className="notice error">
               {state.message}
-            </p>
+            </div>
           )}
         {!state.busy &&
           state.phase === "disconnected" &&
@@ -528,7 +531,7 @@ export function ConnectionDialog({
               取消本次连接
             </Button>
             <p className="text-xs muted mt-2">
-              关闭面板会保留蓝牙会话；取消本次连接才会释放会话。
+              关闭面板会保留连接进度；取消本次连接才会释放会话。
             </p>
           </div>
         )}

@@ -197,7 +197,7 @@ func (s *BridgeService) scanWiFi(ctx context.Context) error {
 	// 同名热点合并，只使用本次实际扫描到的结果；不把蓝牙提示伪装成扫描结果。
 	unique := map[string]platform.WiFiNetwork{}
 	for _, network := range networks {
-		if network.SSID == "" || network.SSID == "<redacted>" {
+		if network.SSID == "" || network.SSID == "<redacted>" || strings.ContainsRune(network.SSID, '\x00') {
 			continue
 		}
 		s.logs.RegisterSecrets(network.SSID)
@@ -237,6 +237,10 @@ func (s *BridgeService) scanWiFi(ctx context.Context) error {
 	})
 	s.mu.Lock()
 	s.state.WiFiNetworks = candidates
+	if !s.switched {
+		s.previousSSID = s.connection.currentSSID()
+		s.logs.RegisterSecrets(s.previousSSID)
+	}
 	s.state.Phase, s.state.Message = "choosing_wifi", "请选择相机热点，确认后才会切换 Wi-Fi"
 	if keychainWarning {
 		s.state.Warning = "暂时无法读取钥匙串状态，可以手动输入密码连接"
@@ -290,6 +294,9 @@ func (s *BridgeService) JoinCameraWiFi(ssid, password string, useSaved, remember
 		return err
 	}
 	s.logs.RegisterSecrets(password, ssid)
+	s.mu.Lock()
+	s.state.SSID = ssid
+	s.mu.Unlock()
 	s.runConnection("connecting", func(ctx context.Context) error {
 		if useSaved {
 			var err error
@@ -342,7 +349,7 @@ func (s *BridgeService) JoinCameraWiFi(ssid, password string, useSaved, remember
 				s.mu.Lock()
 				s.state.Warning = "热点已连接，但密码未能记住：" + err.Error()
 				s.mu.Unlock()
-				trace.Log("warn", "wifi", "wifi.credential_save_failed", "密码保存至钥匙串失败，下次需重新输入", nil)
+				trace.Log("warn", "wifi", "wifi.credential_save_failed", "密码保存至钥匙串失败，下次需重新输入", map[string]string{"error": err.Error()})
 			} else {
 				s.mu.Lock()
 				for i := range s.state.WiFiNetworks {
