@@ -3,6 +3,7 @@ package camera
 import (
 	"context"
 	"net"
+	"osmobridge/internal/diagnostics"
 	"testing"
 	"time"
 )
@@ -59,6 +60,9 @@ func TestCameraSessionAndTwoStoreListing(t *testing.T) {
 	}()
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
+	logs := diagnostics.New(t.TempDir())
+	logs.SaveSettings(diagnostics.Settings{RetentionDays: 7, Level: "debug"})
+	ctx = diagnostics.With(ctx, logs, map[string]string{"connection_id": "test-connection"})
 	link, err := OpenLink(ctx, "127.0.0.1", "00000000000000000000000000000001")
 	if err != nil {
 		t.Fatal(err)
@@ -69,6 +73,22 @@ func TestCameraSessionAndTwoStoreListing(t *testing.T) {
 	}
 	if files[0].Storage != 1 || files[1].Storage != 0 || files[0].ID == files[1].ID {
 		t.Fatal("存储识别错误")
+	}
+	page, err := logs.Read(diagnostics.Query{Limit: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	events := map[string]bool{}
+	for _, e := range page.Entries {
+		events[e.Event] = true
+		if e.Fields["connection_id"] != "test-connection" {
+			t.Fatal("连接关联编号丢失")
+		}
+	}
+	for _, event := range []string{"link.handshake_ready", "link.playback_ready", "media.page_ready"} {
+		if !events[event] {
+			t.Fatalf("关键诊断事件缺失 %s", event)
+		}
 	}
 	link.Close()
 	server.Close()

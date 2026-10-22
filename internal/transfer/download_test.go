@@ -17,7 +17,45 @@ import (
 	"time"
 
 	"osmobridge/internal/camera"
+	"osmobridge/internal/diagnostics"
 )
+
+func TestDownloadDiagnosticsIncludeHTTPRetry(t *testing.T) {
+	logs := diagnostics.New(t.TempDir())
+	if err := logs.SaveSettings(diagnostics.Settings{RetentionDays: 7, Level: "debug"}); err != nil {
+		t.Fatal(err)
+	}
+	var calls atomic.Int32
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if calls.Add(1) == 1 {
+			w.WriteHeader(503)
+			return
+		}
+		http.ServeContent(w, r, "private-video.MP4", time.Time{}, bytes.NewReader(sample))
+	}))
+	defer s.Close()
+	ctx := diagnostics.With(context.Background(), logs, map[string]string{"task_id": "test-task"})
+	if _, err := Download(ctx, Client(), strings.TrimPrefix(s.URL, "http://"), "camera-one", t.TempDir(), media(), func(Progress) {}); err != nil {
+		t.Fatal(err)
+	}
+	page, err := logs.Read(diagnostics.Query{Limit: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	events := map[string]bool{}
+	for _, e := range page.Entries {
+		events[e.Event] = true
+		if e.Fields["task_id"] != "test-task" {
+			t.Fatal("下载任务关联丢失")
+		}
+		if strings.Contains(fmt.Sprint(e), "private-video") {
+			t.Fatal("素材文件名进入了日志")
+		}
+	}
+	if !events["http.request"] || !events["http.response"] || !events["http.status_error"] {
+		t.Fatal("缺少 HTTP 请求与重试的诊断事件", events)
+	}
+}
 
 var sample = bytes.Repeat([]byte("original-camera-media-"), 32768)
 

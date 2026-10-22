@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"osmobridge/internal/camera"
+	"osmobridge/internal/diagnostics"
 )
 
 type Progress struct {
@@ -44,6 +45,7 @@ type identity struct {
 }
 
 func Download(ctx context.Context, client *http.Client, host, device, root string, m camera.Media, progress func(Progress)) (Result, error) {
+	trace := diagnostics.From(ctx)
 	var result Result
 	if !filepath.IsAbs(root) || !camera.SafePath(m.Path) || m.Storage < 0 || m.Storage > 1 {
 		return result, errors.New("无效的下载位置或相机文件路径")
@@ -101,16 +103,19 @@ func Download(ctx context.Context, client *http.Client, host, device, root strin
 		if e != nil {
 			return result, e
 		}
+		trace.Log("debug", "transfer", "http.request", "请求原始文件数据", map[string]string{"attempt": fmt.Sprint(attempt + 1), "offset": fmt.Sprint(offset)})
 		req.Header.Set("Range", fmt.Sprintf("bytes=%d-", offset))
 		req.Header.Set("Accept-Encoding", "identity")
 		resp, e := client.Do(req)
 		if e != nil {
 			lastErr = e
+			trace.Log("warn", "transfer", "http.request_failed", "相机 HTTP 请求失败，将尝试重试", map[string]string{"attempt": fmt.Sprint(attempt + 1), "error": e.Error()})
 			if !retryWait(ctx, attempt) {
 				return result, ctx.Err()
 			}
 			continue
 		}
+		trace.Log("debug", "transfer", "http.response", "收到相机 HTTP 响应", map[string]string{"status": fmt.Sprint(resp.StatusCode), "content_length": fmt.Sprint(resp.ContentLength), "content_range": resp.Header.Get("Content-Range")})
 		if resp.StatusCode == http.StatusRequestedRangeNotSatisfiable {
 			n, e := strconv.ParseInt(strings.TrimPrefix(resp.Header.Get("Content-Range"), "bytes */"), 10, 64)
 			resp.Body.Close()
@@ -127,6 +132,7 @@ func Download(ctx context.Context, client *http.Client, host, device, root strin
 		if resp.StatusCode != 200 && resp.StatusCode != 206 {
 			resp.Body.Close()
 			lastErr = fmt.Errorf("相机返回 HTTP %d", resp.StatusCode)
+			trace.Log("warn", "transfer", "http.status_error", "相机返回错误状态", map[string]string{"status": fmt.Sprint(resp.StatusCode), "attempt": fmt.Sprint(attempt + 1)})
 			if resp.StatusCode != 404 && resp.StatusCode < 500 {
 				return result, lastErr
 			}
@@ -147,6 +153,9 @@ func Download(ctx context.Context, client *http.Client, host, device, root strin
 				resp.Body.Close()
 				return result, errors.New("相机未提供原文件长度，无法确认完整下载")
 			}
+			if offset > 0 {
+				trace.Log("warn", "transfer", "http.range_ignored", "相机未接受续传，已安全从头开始", map[string]string{"previous_bytes": fmt.Sprint(offset)})
+			}
 			// 服务端忽略 Range 时重新开始，禁止将完整文件追加到旧片段。
 			if e = f.Truncate(0); e != nil {
 				resp.Body.Close()
@@ -155,6 +164,7 @@ func Download(ctx context.Context, client *http.Client, host, device, root strin
 			offset = 0
 		}
 		if !sameLength(m.Size, total) {
+			trace.Log("error", "transfer", "http.length_changed", "文件长度与清单不符", map[string]string{"expected_bytes": fmt.Sprint(m.Size), "actual_bytes": fmt.Sprint(total)})
 			resp.Body.Close()
 			return result, errors.New("相机文件长度与素材列表不符，请刷新列表后重试")
 		}
@@ -208,6 +218,7 @@ func Download(ctx context.Context, client *http.Client, host, device, root strin
 			progress(Progress{written, total, 0})
 			break
 		}
+		trace.Log("warn", "transfer", "http.body_interrupted", "传输中断，保留片段并尝试续传", map[string]string{"attempt": fmt.Sprint(attempt + 1), "bytes": fmt.Sprint(written), "error": lastErr.Error()})
 		if !retryWait(ctx, attempt) {
 			return result, ctx.Err()
 		}

@@ -21,7 +21,12 @@ export interface Task {
   path: string;
   sha256: string;
 }
+export interface WiFiCandidate {
+  ssid: string; rssi: number; channel: number; security: string; supported: boolean;
+  likely: boolean; reason: string; hasSavedPassword: boolean;
+}
 export interface State {
+  wifiNetworks: WiFiCandidate[];
   phase: string;
   message: string;
   warning: string;
@@ -41,13 +46,23 @@ export type Method =
   | "GetState"
   | "Scan"
   | "Connect"
+  | "PrepareCamera"
+  | "ScanWiFi"
+  | "JoinCameraWiFi"
+  | "ForgetWiFiPassword"
   | "Disconnect"
   | "Refresh"
   | "Enqueue"
   | "PauseAll"
   | "Retry"
   | "Reveal"
-  | "ChooseDestination";
+  | "ChooseDestination"
+  | "GetLogInfo"
+  | "ReadLogs"
+  | "SaveLogSettings"
+  | "CleanLogs"
+  | "OpenLogDirectory"
+  | "ExportLogs";
 declare global {
   interface Window {
     __OSMO_TEST__?: (method: Method, args: unknown[]) => Promise<unknown>;
@@ -58,6 +73,7 @@ declare global {
 }
 export const emptyState: State = {
   phase: "disconnected",
+  wifiNetworks: [],
   message: "连接相机，开始导入原始素材",
   warning: "",
   deviceName: "",
@@ -109,4 +125,38 @@ export function errorMessage(e: unknown) {
     : typeof e === "string"
       ? e
       : "操作未完成，请重试";
+}
+
+export interface LogSettings {
+  retentionDays: number;
+  level: "info" | "debug";
+}
+export interface LogInfo {
+  settings: LogSettings;
+  directory: string;
+  files: number;
+  bytes: number;
+  maxBytes: number;
+  session: string;
+  lastError: string;
+}
+export interface LogEntry {
+  id: string;
+  time: string;
+  session: string;
+  level: string;
+  component: string;
+  event: string;
+  message: string;
+  fields?: Record<string, string>;
+}
+export interface LogPage {
+  entries: LogEntry[];
+  nextCursor: string;
+  hasMore: boolean;
+  skipped: number;
+}
+export interface CleanupResult {
+  files: number;
+  bytes: number;
 }

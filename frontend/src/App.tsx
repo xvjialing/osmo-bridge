@@ -18,9 +18,8 @@ import {
   Library,
   LoaderCircle,
   Pause,
-  Radio,
   RefreshCw,
-  Search,
+  Settings2,
   ShieldCheck,
   Unplug,
   Video,
@@ -29,7 +28,9 @@ import {
   AlertCircle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { ConnectionDialog } from "@/components/connection-dialog";
+import { SettingsPage } from "@/components/settings-page";
+import { SearchField } from "@/components/search-field";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
@@ -44,7 +45,6 @@ import {
   duration,
   emptyState,
   errorMessage,
-  type Device,
   type Media,
   type State,
   type Task,
@@ -136,11 +136,14 @@ function TaskItem({
 
 export default function App() {
   const [state, setState] = useState<State>(emptyState);
-  const [view, setView] = useState<"library" | "history">("library");
+  const [view, setView] = useState<"library" | "history" | "settings">(
+    import.meta.env.MODE === "test" &&
+      new URLSearchParams(location.search).get("view") === "settings"
+      ? "settings"
+      : "library",
+  );
   const [connectionOpen, setConnectionOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
-  const [devices, setDevices] = useState<Device[]>([]);
-  const [scanned, setScanned] = useState(false);
   const [action, setAction] = useState("");
   const [error, setError] = useState("");
   const [feedback, setFeedback] = useState("");
@@ -149,7 +152,18 @@ export default function App() {
   const [storage, setStorage] = useState(-1);
   const [page, setPage] = useState(1);
   const [selection, setSelection] = useState<Set<string>>(new Set());
-  const searchRef = useRef<HTMLInputElement>(null);
+  const [settingsDirty, setSettingsDirty] = useState(false);
+  const [pendingView, setPendingView] = useState<
+    "library" | "history" | "settings" | null
+  >(null);
+  const discardCancel = useRef<HTMLButtonElement>(null);
+  function navigate(next: "library" | "history" | "settings") {
+    if (view === "settings" && settingsDirty && next !== view) {
+      returnFocus.current = document.activeElement as HTMLElement;
+      setPendingView(next);
+    } else setView(next);
+  }
+
   const previousPhase = useRef("disconnected");
   const returnFocus = useRef<HTMLElement | null>(null);
   function showConnection() {
@@ -161,7 +175,9 @@ export default function App() {
     setHelpOpen(true);
   }
   const connected = state.phase === "connected";
-  const connecting = state.phase === "connecting";
+  const connecting = state.phase === "connecting" || state.phase === "preparing";
+  const pendingConnection =
+    ["choosing_wifi", "waiting_wifi", "connection_error"].includes(state.phase);
   const busy = Boolean(action) || state.busy;
   const completed = state.tasks.filter((t) => t.status === "completed");
   const active = state.tasks.filter((t) => t.status !== "completed");
@@ -170,7 +186,7 @@ export default function App() {
   );
 
   useEffect(() => {
-    document.title = `映桥 · ${view === "library" ? "相机素材" : "导入记录"}`;
+    document.title = `映桥 · ${view === "settings" ? "设置与日志" : view === "library" ? "相机素材" : "导入记录"}`;
   }, [view]);
   useEffect(() => {
     let stopped = false;
@@ -258,27 +274,6 @@ export default function App() {
       return next;
     });
   }
-  async function scan() {
-    await perform("scan", async () => {
-      setScanned(false);
-      setDevices([]);
-      const found = await call<Device[] | null>("Scan");
-      setDevices(found ?? []);
-      setScanned(true);
-    });
-  }
-  async function connect(id: string, manual: boolean) {
-    await perform("connect", async () => {
-      await call("Connect", id, manual);
-      setState((s) => ({
-        ...s,
-        phase: "connecting",
-        busy: true,
-        message: "正在连接相机",
-      }));
-      previousPhase.current = "connecting";
-    });
-  }
   async function disconnect() {
     await perform("disconnect", async () => {
       await call("Disconnect");
@@ -319,7 +314,7 @@ export default function App() {
           <button
             className="nav-button"
             data-active={view === "library"}
-            onClick={() => setView("library")}
+            onClick={() => navigate("library")}
           >
             <Library />
             相机素材
@@ -327,13 +322,21 @@ export default function App() {
           <button
             className="nav-button"
             data-active={view === "history"}
-            onClick={() => setView("history")}
+            onClick={() => navigate("history")}
           >
             <History />
             导入记录
             {completed.length > 0 && (
               <span className="nav-count">{completed.length}</span>
             )}
+          </button>
+          <button
+            className="nav-button"
+            data-active={view === "settings"}
+            onClick={() => navigate("settings")}
+          >
+            <Settings2 />
+            设置
           </button>
         </nav>
         <div>
@@ -351,7 +354,9 @@ export default function App() {
                   ? "连接中"
                   : state.phase === "lost"
                     ? "连接中断"
-                    : "等待连接"}
+                    : pendingConnection
+                      ? "等待接续连接"
+                      : "等待连接"}
             </div>
             <Button
               className="w-full"
@@ -360,8 +365,23 @@ export default function App() {
               onClick={() => (connected ? void disconnect() : showConnection())}
             >
               {connected ? <Unplug /> : <Bluetooth />}
-              {connected ? "断开连接" : "连接相机"}
+              {connected
+                ? "断开连接"
+                : pendingConnection
+                  ? "继续连接"
+                  : "连接相机"}
             </Button>
+            {pendingConnection && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="w-full mt-2"
+                disabled={busy}
+                onClick={() => void disconnect()}
+              >
+                取消本次连接
+              </Button>
+            )}
             {state.ssid && (
               <p className="text-[10px] muted mt-3 break-all">{state.ssid}</p>
             )}
@@ -380,14 +400,18 @@ export default function App() {
         <header className="topbar">
           <div>
             <h1>
-              {view === "library"
-                ? "把精彩，带回电脑。"
-                : "每一次导入，都有记录。"}
+              {view === "settings"
+                ? "设置"
+                : view === "library"
+                  ? "把精彩，带回电脑。"
+                  : "每一次导入，都有记录。"}
             </h1>
             <p>
-              {view === "library"
-                ? "无线直连相机，让素材回到你的工作台。"
-                : "查看已完成的文件与本地完整性指纹。"}
+              {view === "settings"
+                ? "管理本地日志，保留每次连接的排查线索。"
+                : view === "library"
+                  ? "无线直连相机，让素材回到你的工作台。"
+                  : "查看已完成的文件与本地完整性指纹。"}
             </p>
           </div>
           <span className="compatibility">Action 6 · 待实机验证</span>
@@ -431,57 +455,91 @@ export default function App() {
             </Button>
           </div>
         )}
-        <div className="work-grid">
-          <section
-            className="library"
-            aria-label={view === "library" ? "相机素材" : "导入记录"}
-          >
-            <div className="library-header">
-              <div>
-                <h2>{view === "library" ? "相机素材" : "导入记录"}</h2>
-                <p>
-                  {view === "library"
-                    ? connected
-                      ? `${state.media.length} 项素材 · 内置存储与 SD 卡`
-                      : "连接后查看相机中的视频和照片"
-                    : `已完成 ${completed.length} 项 · 文件保留原始格式`}
-                </p>
+        {view === "settings" ? (
+          <SettingsPage onDirtyChange={setSettingsDirty} />
+        ) : (
+          <div className="work-grid">
+            <section
+              className="library"
+              aria-label={view === "library" ? "相机素材" : "导入记录"}
+            >
+              <div className="library-header">
+                <div>
+                  <h2>{view === "library" ? "相机素材" : "导入记录"}</h2>
+                  <p>
+                    {view === "library"
+                      ? connected
+                        ? `${state.media.length} 项素材 · 内置存储与 SD 卡`
+                        : "连接后查看相机中的视频和照片"
+                      : `已完成 ${completed.length} 项 · 文件保留原始格式`}
+                  </p>
+                </div>
+                {view === "library" && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={!connected || busy}
+                    aria-label="刷新素材列表"
+                    onClick={() =>
+                      void perform("refresh", async () => {
+                        await call("Refresh");
+                        setSelection(new Set());
+                        setPage(1);
+                      })
+                    }
+                  >
+                    <RefreshCw
+                      className={action === "refresh" ? "animate-spin" : ""}
+                    />
+                    刷新
+                  </Button>
+                )}
               </div>
               {view === "library" && (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  disabled={!connected || busy}
-                  aria-label="刷新素材列表"
-                  onClick={() =>
-                    void perform("refresh", async () => {
-                      await call("Refresh");
-                      setSelection(new Set());
+                <div className="toolbar">
+                  <div className="filter-group" aria-label="素材类型">
+                    {[
+                      ["all", "全部"],
+                      ["video", "视频"],
+                      ["photo", "照片"],
+                    ].map(([v, t]) => (
+                      <button
+                        key={v}
+                        className="filter"
+                        aria-pressed={kind === v}
+                        onClick={() => {
+                          setKind(v);
+                          setPage(1);
+                        }}
+                      >
+                        {t}
+                      </button>
+                    ))}
+                  </div>
+                  <SearchField
+                    value={query}
+                    onValueChange={(value) => {
+                      setQuery(value);
                       setPage(1);
-                    })
-                  }
-                >
-                  <RefreshCw
-                    className={action === "refresh" ? "animate-spin" : ""}
+                    }}
+                    label="搜索文件名"
+                    placeholder="搜索文件名"
                   />
-                  刷新
-                </Button>
+                </div>
               )}
-            </div>
-            {view === "library" && (
-              <div className="toolbar">
-                <div className="filter-group" aria-label="素材类型">
+              {view === "library" && connected && (
+                <div className="filter-group px-5 pt-4" aria-label="存储位置">
                   {[
-                    ["all", "全部"],
-                    ["video", "视频"],
-                    ["photo", "照片"],
+                    [-1, "所有存储"],
+                    [1, "内置存储"],
+                    [0, "SD 卡"],
                   ].map(([v, t]) => (
                     <button
-                      key={v}
                       className="filter"
-                      aria-pressed={kind === v}
+                      key={v}
+                      aria-pressed={storage === v}
                       onClick={() => {
-                        setKind(v);
+                        setStorage(Number(v));
                         setPage(1);
                       }}
                     >
@@ -489,340 +547,308 @@ export default function App() {
                     </button>
                   ))}
                 </div>
-                <div className="search">
-                  <Search aria-hidden="true" />
-                  <Input
-                    ref={searchRef}
-                    aria-label="搜索文件名"
-                    value={query}
-                    onChange={(e) => {
-                      setQuery(e.target.value);
-                      setPage(1);
-                    }}
-                    placeholder="搜索文件名"
-                  />
-                  {query && (
-                    <button
-                      aria-label="清除搜索"
-                      onClick={() => {
-                        setQuery("");
-                        setPage(1);
-                        searchRef.current?.focus();
-                      }}
-                    >
-                      <X size={14} />
-                    </button>
-                  )}
-                </div>
-              </div>
-            )}
-            {view === "library" && connected && (
-              <div className="filter-group px-5 pt-4" aria-label="存储位置">
-                {[
-                  [-1, "所有存储"],
-                  [1, "内置存储"],
-                  [0, "SD 卡"],
-                ].map(([v, t]) => (
-                  <button
-                    className="filter"
-                    key={v}
-                    aria-pressed={storage === v}
-                    onClick={() => {
-                      setStorage(Number(v));
-                      setPage(1);
-                    }}
-                  >
-                    {t}
-                  </button>
-                ))}
-              </div>
-            )}
-            <div className="library-body">
-              {view === "history" ? (
-                completed.length ? (
-                  <table className="history-table">
-                    <caption className="sr-only">已完成的素材导入</caption>
-                    <thead>
-                      <tr>
-                        <th>文件</th>
-                        <th>大小 / SHA-256</th>
-                        <th>操作</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {completed.map((t) => (
-                        <tr key={t.id}>
-                          <td className="font-mono text-[10px]">
-                            {t.media.name}
-                          </td>
-                          <td>
-                            <div>{bytes(t.progress.total)}</div>
-                            <details className="text-[10px] muted mt-1">
-                              <summary className="cursor-pointer">
-                                查看 SHA-256
-                              </summary>
-                              <code className="break-all">{t.sha256}</code>
-                            </details>
-                          </td>
-                          <td>
-                            <Button
-                              size="sm"
-                              variant="ghost"
-                              onClick={() => taskAction("Reveal", t.id)}
-                            >
-                              <FolderOpen />
-                              打开
-                            </Button>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                ) : (
-                  <div className="empty-state">
-                    <History size={38} className="muted mb-5" />
-                    <h3>还没有导入记录</h3>
-                    <p>素材下载完成后，会在这里留下文件位置和 SHA-256 指纹。</p>
-                    <Button
-                      variant="outline"
-                      onClick={() => setView("library")}
-                    >
-                      前往相机素材
-                      <ArrowRight />
-                    </Button>
-                  </div>
-                )
-              ) : !connected ? (
-                <div className="empty-state">
-                  <div className="connection-art" aria-hidden="true">
-                    <span className="device">
-                      <Camera />
-                    </span>
-                    <span className="connection-track">
-                      <Wifi />
-                    </span>
-                    <span className="device">
-                      <Laptop />
-                    </span>
-                  </div>
-                  <h3>
-                    {connecting ? "正在连接你的相机" : "相机里的精彩，即刻导入"}
-                  </h3>
-                  <p>
-                    {connecting
-                      ? state.message
-                      : "开启相机，关闭手机上的 DJI Mimo。通过蓝牙配对，建立相机与 Mac 的无线连接。"}
-                  </p>
-                  <Button
-                    disabled={busy && !connecting}
-                    onClick={() =>
-                      connecting ? void disconnect() : showConnection()
-                    }
-                  >
-                    {connecting ? (
-                      <LoaderCircle className="animate-spin" />
-                    ) : (
-                      <Bluetooth />
-                    )}
-                    {connecting ? "取消连接" : "连接相机"}
-                  </Button>
-                  <div className="connect-steps">
-                    <span>
-                      <b>1</b>开启相机
-                    </span>
-                    <span>
-                      <b>2</b>确认配对
-                    </span>
-                    <span>
-                      <b>3</b>导入素材
-                    </span>
-                  </div>
-                </div>
-              ) : filtered.length === 0 ? (
-                <div className="empty-state">
-                  <ImageIcon size={38} className="muted mb-5" />
-                  <h3>
-                    {state.media.length
-                      ? "没有匹配的素材"
-                      : "相机中暂无可显示的素材"}
-                  </h3>
-                  <p>
-                    {state.media.length
-                      ? "尝试其他文件名，或清除当前筛选条件。"
-                      : "拍摄后刷新列表，或检查相机中的存储卡。"}
-                  </p>
-                  {state.media.length > 0 && (
-                    <Button
-                      variant="outline"
-                      onClick={() => {
-                        setQuery("");
-                        setKind("all");
-                        setStorage(-1);
-                        setPage(1);
-                      }}
-                    >
-                      清除筛选
-                    </Button>
-                  )}
-                </div>
-              ) : (
-                <>
-                  <div className="media-grid">
-                    {visible.map((m) => (
-                      <article
-                        key={m.id}
-                        className={`media-card ${selection.has(m.id) ? "selected" : ""}`}
-                      >
-                        <Thumbnail media={m} />
-                        <div className="media-check">
-                          <Checkbox
-                            checked={selection.has(m.id)}
-                            aria-label={`选择 ${m.name}`}
-                            onCheckedChange={() => toggle(m.id)}
-                          />
-                        </div>
-                        <div className="media-info">
-                          <div className="media-name">{m.name}</div>
-                          <div className="media-meta">
-                            <span>{bytes(m.size)}</span>
-                            <span>
-                              {m.storage === 1 ? "内置存储" : "SD 卡"}
-                            </span>
-                          </div>
-                          <div className="text-[10px] muted mt-1">
-                            {m.date || "拍摄时间未知"}
-                          </div>
-                        </div>
-                      </article>
-                    ))}
-                  </div>
-                  <nav className="pagination" aria-label="素材分页">
-                    <Button
-                      size="icon"
-                      variant="ghost"
-                      aria-label="上一页"
-                      disabled={currentPage === 1}
-                      onClick={() => setPage((p) => p - 1)}
-                    >
-                      <ChevronLeft />
-                    </Button>
-                    <span>
-                      {currentPage} / {totalPages} 页 · {filtered.length} 项
-                    </span>
-                    <Button
-                      size="icon"
-                      variant="ghost"
-                      aria-label="下一页"
-                      disabled={currentPage === totalPages}
-                      onClick={() => setPage((p) => p + 1)}
-                    >
-                      <ChevronRight />
-                    </Button>
-                  </nav>
-                </>
               )}
-            </div>
-            {view === "library" && (
-              <div className="library-footer">
-                <label className="selection-label">
-                  <Checkbox
-                    checked={allSelected}
-                    disabled={!connected || visible.length === 0}
-                    onCheckedChange={togglePage}
-                    aria-label="选择当前页全部素材"
-                  />
-                  全选本页
-                </label>
-                <span className="footer-count">
-                  已选 {selection.size} 项
-                  {selection.size > 0 ? ` · ${bytes(selectedBytes)}` : ""}
-                </span>
-                <Button
-                  className="download-button"
-                  disabled={!connected || !selection.size || busy}
-                  onClick={() => void enqueue()}
-                >
-                  <ArrowDownToLine />
-                  {selection.size ? `导入 ${selection.size} 项` : "导入所选"}
-                </Button>
-              </div>
-            )}
-          </section>
-          <aside className="queue-column" aria-label="传输面板">
-            <section className="queue-panel">
-              <div className="panel-heading">
-                <ArrowDownToLine />
-                传输队列<span className="nav-count">{active.length}</span>
-                {running && (
-                  <Button
-                    className="ml-auto"
-                    variant="ghost"
-                    size="icon"
-                    aria-label="暂停所有下载"
-                    disabled={Boolean(action)}
-                    onClick={() =>
-                      void perform("pause", () => call("PauseAll"))
-                    }
-                  >
-                    <Pause />
-                  </Button>
+              <div className="library-body">
+                {view === "history" ? (
+                  completed.length ? (
+                    <table className="history-table">
+                      <caption className="sr-only">已完成的素材导入</caption>
+                      <thead>
+                        <tr>
+                          <th>文件</th>
+                          <th>大小 / SHA-256</th>
+                          <th>操作</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {completed.map((t) => (
+                          <tr key={t.id}>
+                            <td className="font-mono text-[10px]">
+                              {t.media.name}
+                            </td>
+                            <td>
+                              <div>{bytes(t.progress.total)}</div>
+                              <details className="text-[10px] muted mt-1">
+                                <summary className="cursor-pointer">
+                                  查看 SHA-256
+                                </summary>
+                                <code className="break-all">{t.sha256}</code>
+                              </details>
+                            </td>
+                            <td>
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                onClick={() => taskAction("Reveal", t.id)}
+                              >
+                                <FolderOpen />
+                                打开
+                              </Button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  ) : (
+                    <div className="empty-state">
+                      <History size={38} className="muted mb-5" />
+                      <h3>还没有导入记录</h3>
+                      <p>
+                        素材下载完成后，会在这里留下文件位置和 SHA-256 指纹。
+                      </p>
+                      <Button
+                        variant="outline"
+                        onClick={() => navigate("library")}
+                      >
+                        前往相机素材
+                        <ArrowRight />
+                      </Button>
+                    </div>
+                  )
+                ) : !connected ? (
+                  <div className="empty-state">
+                    <div className="connection-art" aria-hidden="true">
+                      <span className="device">
+                        <Camera />
+                      </span>
+                      <span className="connection-track">
+                        <Wifi />
+                      </span>
+                      <span className="device">
+                        <Laptop />
+                      </span>
+                    </div>
+                    <h3>
+                      {connecting
+                        ? "正在连接你的相机"
+                        : pendingConnection
+                          ? state.phase === "waiting_wifi"
+                            ? "请先加入相机 Wi-Fi"
+                            : "素材连接尚未完成"
+                          : "相机里的精彩，即刻导入"}
+                    </h3>
+                    <p>
+                      {connecting || pendingConnection
+                        ? state.message
+                        : "开启相机，关闭手机上的 DJI Mimo。通过蓝牙配对，建立相机与 Mac 的无线连接。"}
+                    </p>
+                    <Button
+                      disabled={busy && !connecting}
+                      onClick={() =>
+                        connecting ? void disconnect() : showConnection()
+                      }
+                    >
+                      {connecting ? (
+                        <LoaderCircle className="animate-spin" />
+                      ) : (
+                        <Bluetooth />
+                      )}
+                      {connecting
+                        ? "取消连接"
+                        : pendingConnection
+                          ? "查看接续步骤"
+                          : "连接相机"}
+                    </Button>
+                    <div className="connect-steps">
+                      <span>
+                        <b>1</b>开启相机
+                      </span>
+                      <span>
+                        <b>2</b>确认配对
+                      </span>
+                      <span>
+                        <b>3</b>导入素材
+                      </span>
+                    </div>
+                  </div>
+                ) : filtered.length === 0 ? (
+                  <div className="empty-state">
+                    <ImageIcon size={38} className="muted mb-5" />
+                    <h3>
+                      {state.media.length
+                        ? "没有匹配的素材"
+                        : "相机中暂无可显示的素材"}
+                    </h3>
+                    <p>
+                      {state.media.length
+                        ? "尝试其他文件名，或清除当前筛选条件。"
+                        : "拍摄后刷新列表，或检查相机中的存储卡。"}
+                    </p>
+                    {state.media.length > 0 && (
+                      <Button
+                        variant="outline"
+                        onClick={() => {
+                          setQuery("");
+                          setKind("all");
+                          setStorage(-1);
+                          setPage(1);
+                        }}
+                      >
+                        清除筛选
+                      </Button>
+                    )}
+                  </div>
+                ) : (
+                  <>
+                    <div className="media-grid">
+                      {visible.map((m) => (
+                        <article
+                          key={m.id}
+                          className={`media-card ${selection.has(m.id) ? "selected" : ""}`}
+                        >
+                          <Thumbnail media={m} />
+                          <div className="media-check">
+                            <Checkbox
+                              checked={selection.has(m.id)}
+                              aria-label={`选择 ${m.name}`}
+                              onCheckedChange={() => toggle(m.id)}
+                            />
+                          </div>
+                          <div className="media-info">
+                            <div className="media-name">{m.name}</div>
+                            <div className="media-meta">
+                              <span>{bytes(m.size)}</span>
+                              <span>
+                                {m.storage === 1 ? "内置存储" : "SD 卡"}
+                              </span>
+                            </div>
+                            <div className="text-[10px] muted mt-1">
+                              {m.date || "拍摄时间未知"}
+                            </div>
+                          </div>
+                        </article>
+                      ))}
+                    </div>
+                    <nav className="pagination" aria-label="素材分页">
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        aria-label="上一页"
+                        disabled={currentPage === 1}
+                        onClick={() => setPage((p) => p - 1)}
+                      >
+                        <ChevronLeft />
+                      </Button>
+                      <span>
+                        {currentPage} / {totalPages} 页 · {filtered.length} 项
+                      </span>
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        aria-label="下一页"
+                        disabled={currentPage === totalPages}
+                        onClick={() => setPage((p) => p + 1)}
+                      >
+                        <ChevronRight />
+                      </Button>
+                    </nav>
+                  </>
                 )}
               </div>
-              {active.length ? (
-                <div className="task-list">
-                  {active.map((t) => (
-                    <TaskItem key={t.id} task={t} onAction={taskAction} />
-                  ))}
-                </div>
-              ) : (
-                <div className="queue-empty">
-                  <ArrowDownToLine />
-                  <strong>
-                    {completed.length
-                      ? "素材已安全写入本地"
-                      : "等待你的第一份素材"}
-                  </strong>
-                  <p>
-                    选中视频或照片，点击「导入所选」
-                    <br />
-                    即可开始无线传输
-                  </p>
+              {view === "library" && (
+                <div className="library-footer">
+                  <label className="selection-label">
+                    <Checkbox
+                      checked={allSelected}
+                      disabled={!connected || visible.length === 0}
+                      onCheckedChange={togglePage}
+                      aria-label="选择当前页全部素材"
+                    />
+                    全选本页
+                  </label>
+                  <span className="footer-count">
+                    已选 {selection.size} 项
+                    {selection.size > 0 ? ` · ${bytes(selectedBytes)}` : ""}
+                  </span>
+                  <Button
+                    className="download-button"
+                    disabled={!connected || !selection.size || busy}
+                    onClick={() => void enqueue()}
+                  >
+                    <ArrowDownToLine />
+                    {selection.size ? `导入 ${selection.size} 项` : "导入所选"}
+                  </Button>
                 </div>
               )}
-              <div className="destination">
-                <div className="label">导入位置</div>
-                <div className="destination-path">
-                  <Folder />
-                  <span>{state.destination}</span>
-                </div>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="w-full"
-                  disabled={Boolean(action)}
-                  onClick={() =>
-                    void perform("destination", () => call("ChooseDestination"))
-                  }
-                >
-                  <FolderOpen />
-                  更改文件夹
-                </Button>
-              </div>
             </section>
-            <div className="small-note">
-              <strong>
-                <ShieldCheck size={15} className="inline mr-1.5 -mt-0.5" />
-                每一帧，保持原样
-              </strong>
-              下载相机原始文件，不转码。中断后保留进度，完成后记录本地 SHA-256
-              指纹。
-              <div className="mt-4 pt-4 border-t border-border">
-                <Wifi size={14} className="inline mr-1.5" />
-                连接相机热点期间，Mac 的 Wi-Fi 互联网连接可能暂时不可用。
+            <aside className="queue-column" aria-label="传输面板">
+              <section className="queue-panel">
+                <div className="panel-heading">
+                  <ArrowDownToLine />
+                  传输队列<span className="nav-count">{active.length}</span>
+                  {running && (
+                    <Button
+                      className="ml-auto"
+                      variant="ghost"
+                      size="icon"
+                      aria-label="暂停所有下载"
+                      disabled={Boolean(action)}
+                      onClick={() =>
+                        void perform("pause", () => call("PauseAll"))
+                      }
+                    >
+                      <Pause />
+                    </Button>
+                  )}
+                </div>
+                {active.length ? (
+                  <div className="task-list">
+                    {active.map((t) => (
+                      <TaskItem key={t.id} task={t} onAction={taskAction} />
+                    ))}
+                  </div>
+                ) : (
+                  <div className="queue-empty">
+                    <ArrowDownToLine />
+                    <strong>
+                      {completed.length
+                        ? "素材已安全写入本地"
+                        : "等待你的第一份素材"}
+                    </strong>
+                    <p>
+                      选中视频或照片，点击「导入所选」
+                      <br />
+                      即可开始无线传输
+                    </p>
+                  </div>
+                )}
+                <div className="destination">
+                  <div className="label">导入位置</div>
+                  <div className="destination-path">
+                    <Folder />
+                    <span>{state.destination}</span>
+                  </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="w-full"
+                    disabled={Boolean(action)}
+                    onClick={() =>
+                      void perform("destination", () =>
+                        call("ChooseDestination"),
+                      )
+                    }
+                  >
+                    <FolderOpen />
+                    更改文件夹
+                  </Button>
+                </div>
+              </section>
+              <div className="small-note">
+                <strong>
+                  <ShieldCheck size={15} className="inline mr-1.5 -mt-0.5" />
+                  每一帧，保持原样
+                </strong>
+                下载相机原始文件，不转码。中断后保留进度，完成后记录本地 SHA-256
+                指纹。
+                <div className="mt-4 pt-4 border-t border-border">
+                  <Wifi size={14} className="inline mr-1.5" />
+                  连接相机热点期间，Mac 的 Wi-Fi 互联网连接可能暂时不可用。
+                </div>
               </div>
-            </div>
-          </aside>
-        </div>
+            </aside>
+          </div>
+        )}
         <footer className="statusbar" role="status">
           <span className={`dot ${connected ? "connected" : ""}`} />
           <span>
@@ -835,98 +861,53 @@ export default function App() {
           <span>仅通过本地网络传输</span>
         </footer>
       </main>
-      <Dialog open={connectionOpen} onOpenChange={setConnectionOpen}>
+      <Dialog
+        open={pendingView !== null}
+        onOpenChange={(open) => {
+          if (!open) setPendingView(null);
+        }}
+      >
         <DialogContent
+          onOpenAutoFocus={(e) => {
+            e.preventDefault();
+            discardCancel.current?.focus();
+          }}
           onCloseAutoFocus={(e) => {
             e.preventDefault();
             returnFocus.current?.focus();
           }}
-          className="sm:max-w-[500px] max-h-[85vh] overflow-y-auto"
         >
           <DialogHeader>
-            <DialogTitle>连接你的相机</DialogTitle>
+            <DialogTitle>日志设置尚未保存</DialogTitle>
             <DialogDescription>
-              将相机放在 Mac 附近，并退出手机上的 DJI Mimo。
+              离开设置页将放弃当前修改，已保存的设置不会改变。
             </DialogDescription>
           </DialogHeader>
-          <div className="connect-box">
-            <div className="flex items-center gap-2 font-medium">
-              <Bluetooth size={18} />
-              蓝牙发现与配对
-            </div>
-            <p className="text-xs muted mt-2 mb-4">
-              首次连接需在相机屏幕确认。配对后，Mac 将切换到相机 Wi-Fi。
-            </p>
+          <div className="flex justify-end gap-3">
             <Button
-              className="w-full"
-              disabled={busy}
-              onClick={() => void scan()}
-            >
-              {action === "scan" ? (
-                <LoaderCircle className="animate-spin" />
-              ) : (
-                <Radio />
-              )}
-              {action === "scan" ? "正在搜索…" : "搜索附近相机"}
-            </Button>
-            {scanned && !devices.length && (
-              <p className="text-xs muted mt-4" role="status">
-                未找到相机。请检查蓝牙权限、相机电源，并确认手机已断开。
-              </p>
-            )}
-            <div className="connection-list">
-              {devices.map((d) => (
-                <button
-                  key={d.id}
-                  className="camera-option"
-                  disabled={busy}
-                  onClick={() => void connect(d.id, false)}
-                >
-                  <Camera size={19} />
-                  <span>{d.name}</span>
-                  <small>{d.rssi} dBm</small>
-                  <ChevronRight size={16} />
-                </button>
-              ))}
-            </div>
-          </div>
-          <div>
-            <div className="font-medium text-sm">已经加入相机 Wi-Fi？</div>
-            <p className="text-xs muted mt-2 mb-4">
-              在 macOS Wi-Fi
-              菜单中加入相机热点后，可直接建立素材会话。手动模式的续传仅限当前连接会话。
-            </p>
-            <Button
+              ref={discardCancel}
               variant="outline"
-              className="w-full"
-              disabled={busy}
-              onClick={() => void connect("", true)}
+              onClick={() => setPendingView(null)}
             >
-              <Wifi />
-              连接已加入的相机热点
+              继续编辑
+            </Button>
+            <Button
+              onClick={() => {
+                if (pendingView) setView(pendingView);
+                setPendingView(null);
+                setSettingsDirty(false);
+              }}
+            >
+              放弃修改并离开
             </Button>
           </div>
-          {connecting && (
-            <div className="notice mt-4" role="status">
-              <LoaderCircle className="animate-spin" />
-              {state.message}
-            </div>
-          )}
-          {!connecting &&
-            state.message !== "连接相机，开始导入原始素材" &&
-            !connected && <p className="text-xs muted">{state.message}</p>}
-          {error && (
-            <div role="alert" className="notice error mt-3">
-              {error}
-            </div>
-          )}
-          {connecting && (
-            <Button variant="ghost" onClick={() => void disconnect()}>
-              取消连接
-            </Button>
-          )}
         </DialogContent>
       </Dialog>
+      <ConnectionDialog open={connectionOpen} onOpenChange={setConnectionOpen} state={state} returnFocus={returnFocus} onState={(next) => {
+        setState(next);
+        if (next.phase === "connecting") previousPhase.current = "connecting";
+        if (next.phase === "connected") { setConnectionOpen(false); setSelection(new Set()); setFeedback("相机已连接，可以选择素材导入"); }
+      }} />
       <Dialog open={helpOpen} onOpenChange={setHelpOpen}>
         <DialogContent
           onCloseAutoFocus={(e) => {
@@ -945,8 +926,8 @@ export default function App() {
             <li>在 macOS 系统设置中允许映桥使用蓝牙和本地网络。</li>
             <li>点击搜索，选中相机，并在相机屏幕上确认 OSMO 配对。</li>
             <li>
-              自动加入热点失败时，通过 macOS Wi-Fi
-              菜单手动加入，再使用「连接已加入的相机热点」。
+              在扫描出的 Wi-Fi 列表中选定相机热点，输入相机「系统设置 → 无线连接 → 无线信息」中的密码。
+              勾选记住后，认证成功会存入本机钥匙串，下次可直接使用。也可通过系统 Wi-Fi 菜单连接后接续。
             </li>
           </ol>
           <p className="text-xs muted mt-3">

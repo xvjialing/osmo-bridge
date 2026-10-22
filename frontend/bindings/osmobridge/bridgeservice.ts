@@ -8,6 +8,9 @@ import { Call as $Call, CancellablePromise as $CancellablePromise } from "@wails
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
 import * as camera$0 from "./internal/camera/models.js";
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
+import * as diagnostics$0 from "./internal/diagnostics/models.js";
 
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
@@ -15,6 +18,10 @@ import * as $models from "./models.js";
 
 export function ChooseDestination(): $CancellablePromise<string> {
     return $Call.ByName("main.BridgeService.ChooseDestination");
+}
+
+export function CleanLogs(all: boolean): $CancellablePromise<diagnostics$0.Cleanup> {
+    return $Call.ByName("main.BridgeService.CleanLogs", all);
 }
 
 export function Connect(id: string, manual: boolean): $CancellablePromise<void> {
@@ -29,12 +36,31 @@ export function Enqueue(ids: string[] | null): $CancellablePromise<void> {
     return $Call.ByName("main.BridgeService.Enqueue", ids);
 }
 
+/**
+ * 用户选择目录后创建唯一文件，避免覆盖已有诊断包；失败时移除不完整导出。
+ */
+export function ExportLogs(): $CancellablePromise<string> {
+    return $Call.ByName("main.BridgeService.ExportLogs");
+}
+
+export function GetLogInfo(): $CancellablePromise<diagnostics$0.Info> {
+    return $Call.ByName("main.BridgeService.GetLogInfo");
+}
+
 export function GetState(): $CancellablePromise<$models.State> {
     return $Call.ByName("main.BridgeService.GetState");
 }
 
+export function OpenLogDirectory(): $CancellablePromise<void> {
+    return $Call.ByName("main.BridgeService.OpenLogDirectory");
+}
+
 export function PauseAll(): $CancellablePromise<void> {
     return $Call.ByName("main.BridgeService.PauseAll");
+}
+
+export function ReadLogs(q: diagnostics$0.Query): $CancellablePromise<diagnostics$0.Page> {
+    return $Call.ByName("main.BridgeService.ReadLogs", q);
 }
 
 export function Refresh(): $CancellablePromise<void> {
@@ -47,6 +73,10 @@ export function Retry(id: string): $CancellablePromise<void> {
 
 export function Reveal(id: string): $CancellablePromise<void> {
     return $Call.ByName("main.BridgeService.Reveal", id);
+}
+
+export function SaveLogSettings(settings: diagnostics$0.Settings): $CancellablePromise<void> {
+    return $Call.ByName("main.BridgeService.SaveLogSettings", settings);
 }
 
 export function Scan(): $CancellablePromise<camera$0.Device[] | null> {

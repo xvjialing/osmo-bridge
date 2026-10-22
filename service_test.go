@@ -3,9 +3,39 @@ package main
 import (
 	"encoding/json"
 	"os"
+	"osmobridge/internal/diagnostics"
 	"path/filepath"
 	"testing"
 )
+
+func TestLogServiceSettingsAndClearDoNotTouchTasks(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("OSMO_BRIDGE_DATA", root)
+	s := NewBridgeService()
+	s.state.Tasks = []Task{{ID: "keep", Status: "completed"}}
+	if err := s.SaveLogSettings(diagnostics.Settings{RetentionDays: 14, Level: "debug"}); err != nil {
+		t.Fatal(err)
+	}
+	if s.GetLogInfo().Settings.RetentionDays != 14 {
+		t.Fatal("日志设置未保存")
+	}
+	s.logs.RegisterSecrets("hidden-wifi-name")
+	s.logs.Record("error", "wifi", "wifi.failed", "hidden-wifi-name 连接失败", nil)
+	p, err := s.ReadLogs(diagnostics.Query{Level: "error", Limit: 10})
+	if err != nil || len(p.Entries) != 1 {
+		t.Fatal(p, err)
+	}
+	if _, err = s.CleanLogs(true); err != nil {
+		t.Fatal(err)
+	}
+	if len(s.GetState().Tasks) != 1 || s.GetState().Tasks[0].ID != "keep" {
+		t.Fatal("清理日志影响了下载记录")
+	}
+	p, err = s.ReadLogs(diagnostics.Query{})
+	if err != nil || len(p.Entries) != 1 || p.Entries[0].Event != "logs.cleaned" {
+		t.Fatal(p, err)
+	}
+}
 
 func TestRestartPausesInterruptedTransfers(t *testing.T) {
 	root := t.TempDir()

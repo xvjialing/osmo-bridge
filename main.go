@@ -3,8 +3,9 @@ package main
 import (
 	"embed"
 	"github.com/wailsapp/wails/v3/pkg/application"
-	"log"
+	"log/slog"
 	"net/http"
+	"os"
 	"strings"
 )
 
@@ -19,7 +20,7 @@ var applicationIcon []byte
 func main() {
 	service := NewBridgeService()
 	files := application.AssetFileServerFS(assets)
-	app := application.New(application.Options{Name: "映桥", Description: "Osmo 相机无线素材导入", Icon: applicationIcon, Services: []application.Service{application.NewService(service)}, Assets: application.AssetOptions{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	app := application.New(application.Options{Name: "映桥", Description: "Osmo 相机无线素材导入", Icon: applicationIcon, Logger: service.logs.Slog(), LogLevel: slog.LevelWarn, Services: []application.Service{application.NewService(service)}, Assets: application.AssetOptions{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/camera-thumbnail/") {
 			service.serveThumbnail(w, r)
 			return
@@ -40,6 +41,7 @@ func main() {
 	app.Menu.SetApplicationMenu(menu)
 	app.Window.NewWithOptions(application.WebviewWindowOptions{Title: "映桥 · Osmo Bridge", Width: 1420, Height: 900, MinWidth: 820, MinHeight: 620, URL: "/", BackgroundColour: application.NewRGB(244, 246, 250)})
 	if err := app.Run(); err != nil {
-		log.Fatal(err)
+		service.logs.Record("error", "app", "app.run_failed", "应用运行失败", map[string]string{"error": err.Error()})
+		os.Exit(1)
 	}
 }

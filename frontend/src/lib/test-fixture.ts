@@ -1,4 +1,12 @@
-import { emptyState, type State, type Method, type Task } from "./bridge";
+import {
+  emptyState,
+  type State,
+  type Method,
+  type Task,
+  type LogInfo,
+  type LogEntry,
+  type LogSettings,
+} from "./bridge";
 
 // 仅由 test 构建加载；数据和动作都是显式标记的本地测试夹具。
 const scenario = new URLSearchParams(location.search).get("fixture");
@@ -28,7 +36,107 @@ if (scenario !== "disconnected" && scenario !== "error") {
       date: "2026-10-22 12:30:00",
     }));
 }
+const logInfo: LogInfo = {
+  settings: { retentionDays: 7, level: "info" },
+  directory: "/测试目录/OsmoBridge/logs",
+  files: 4,
+  bytes: 384920,
+  maxBytes: 104857600,
+  session: "a1b2c3d4e5f6",
+  lastError: "",
+};
+let logEntries: LogEntry[] = Array.from({ length: 126 }, (_, i) => ({
+  id: `test-log-${i}`,
+  time: new Date(Date.UTC(2026, 9, 22, 11, 30, 0) - i * 10000).toISOString(),
+  session: "a1b2c3d4e5f6",
+  level: i % 5 === 0 ? "error" : i % 3 === 0 ? "warn" : "info",
+  component: ["connection", "wifi", "datalink", "media", "transfer"][i % 5],
+  event: [
+    "connection.failed",
+    "wifi.joined",
+    "link.handshake_ready",
+    "media.page_ready",
+    "transfer.started",
+  ][i % 5],
+  message: [
+    "相机未响应，请检查热点连接和本地网络权限",
+    "已加入相机热点",
+    "UDP 握手完成",
+    "素材分页接收完成",
+    "开始下载原始素材",
+  ][i % 5],
+  fields: {
+    connection_id: "c8d1e2f3a456",
+    elapsed_ms: String(320 + i * 10),
+    attempt: "1",
+  },
+}));
+if (scenario === "waiting-wifi" || scenario === "connection-error") {
+  state.phase =
+    scenario === "waiting-wifi" ? "waiting_wifi" : "connection_error";
+  state.media = [];
+  state.deviceName = "Action 6 · 虚拟设备";
+  state.ssid = "TEST-OSMO";
+  state.message =
+    scenario === "waiting-wifi"
+      ? "自动认证未完成，请在系统 Wi-Fi 菜单手动加入相机热点"
+      : "热点已就绪，素材握手未响应";
+}
 export async function fixtureCall(method: Method, args: unknown[]) {
+  if (method === "GetLogInfo") return structuredClone(logInfo);
+  if (method === "ReadLogs") {
+    const q = args[0] as {
+      level: string;
+      search: string;
+      before: string;
+      limit: number;
+    };
+    if (scenario === "logs-error")
+      throw new Error("测试错误：无法读取日志目录，请检查权限后重试");
+    const filtered = logEntries.filter(
+      (e) =>
+        (q.level === "all" || !q.level || e.level === q.level) &&
+        JSON.stringify(e).toLowerCase().includes(q.search.toLowerCase()),
+    );
+    const start = q.before
+      ? Math.max(0, filtered.findIndex((e) => e.id === q.before) + 1)
+      : 0;
+    const entries = filtered.slice(start, start + q.limit);
+    const hasMore = start + q.limit < filtered.length;
+    return {
+      entries,
+      nextCursor: hasMore ? entries[entries.length - 1].id : "",
+      hasMore,
+      skipped: 0,
+    };
+  }
+  if (method === "SaveLogSettings") {
+    logInfo.settings = structuredClone(args[0] as LogSettings);
+    return;
+  }
+  if (method === "CleanLogs") {
+    const count = logInfo.files;
+    const size = logInfo.bytes;
+    if (args[0]) {
+      logInfo.files = 1;
+      logInfo.bytes = 240;
+      logEntries = [
+        {
+          id: "test-cleared",
+          time: new Date().toISOString(),
+          session: logInfo.session,
+          level: "info",
+          component: "app",
+          event: "logs.cleaned",
+          message: "日志清理完成",
+          fields: { files: String(count) },
+        },
+      ];
+    }
+    return { files: args[0] ? count : 0, bytes: args[0] ? size : 0 };
+  }
+  if (method === "ExportLogs") return "/测试目录/映桥诊断-测试.zip";
+  if (method === "OpenLogDirectory") return;
   if (method === "GetState") return structuredClone(state);
   if (method === "Scan") {
     await new Promise((r) => setTimeout(r, 250));
@@ -37,6 +145,20 @@ export async function fixtureCall(method: Method, args: unknown[]) {
     return [{ id: "test-camera", name: "Action 6 · 虚拟设备", rssi: -42 }];
   }
   if (method === "Connect") {
+    if (
+      (scenario === "waiting-wifi" || scenario === "connection-error") &&
+      args[1]
+    ) {
+      state.phase = "connecting";
+      state.busy = true;
+      state.message = "测试：等待网络地址就绪";
+      setTimeout(() => {
+        state.phase = "connected";
+        state.busy = false;
+        state.message = "测试：已建立素材会话";
+      }, 300);
+      return;
+    }
     state.phase = "connecting";
     state.busy = true;
     state.message = "测试：等待相机确认";

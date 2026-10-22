@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"osmobridge/internal/diagnostics"
 	"sort"
 	"sync"
 	"time"
@@ -26,16 +27,23 @@ type Link struct {
 	counter              uint16
 	playback             bool
 	lastSeen             time.Time
+	trace                diagnostics.Trace
+	lastSendError        time.Time
 }
 
 func hx(s string) []byte { b, _ := hex.DecodeString(s); return b }
 
 func OpenLink(ctx context.Context, host, identity string) (*Link, error) {
+	trace := diagnostics.From(ctx)
+	trace.Log("info", "datalink", "link.open", "开始建立相机数据链路", map[string]string{"port": "9004"})
 	// HTTP 与 UDP 只访问用户直接连接的相机；不扫描其他网络设备。
 	if c, err := net.DialTimeout("tcp", net.JoinHostPort(host, "7001"), 1200*time.Millisecond); err == nil {
 		_ = c.SetWriteDeadline(time.Now().Add(time.Second))
 		_, _ = c.Write(Pairing(identity).Encode())
 		_ = c.Close()
+		trace.Log("debug", "datalink", "link.poke", "已发送 TCP 会话唤醒", nil)
+	} else {
+		trace.Log("warn", "datalink", "link.poke_failed", "TCP 会话唤醒失败，将继续尝试 UDP", map[string]string{"error": err.Error()})
 	}
 	a, err := net.ResolveUDPAddr("udp", net.JoinHostPort(host, "9004"))
 	if err != nil {
@@ -48,13 +56,14 @@ func OpenLink(ctx context.Context, host, identity string) (*Link, error) {
 	var seed [4]byte
 	_, _ = rand.Read(seed[:])
 	base := le.Uint16(seed[2:]) & 0xfff8
-	l := &Link{conn: c, session: le.Uint16(seed[:2]), seq: base + 8, msgSeq: 0xa000, cursors: [3]uint16{0, base, base}, done: make(chan struct{}), inbox: make(chan Message, 512), lastSeen: time.Now()}
+	l := &Link{conn: c, session: le.Uint16(seed[:2]), seq: base + 8, msgSeq: 0xa000, cursors: [3]uint16{0, base, base}, done: make(chan struct{}), inbox: make(chan Message, 512), lastSeen: time.Now(), trace: trace}
 	l.ctx, l.cancel = context.WithCancel(context.Background())
 	body := hx("b88764006400c005140000640000019001c005140000640014006400c00514000064000101040102")
 	le.PutUint16(body, base)
 	buf := make([]byte, 65535)
 	connected := false
-	for range 15 {
+	for attempt := 0; attempt < 15; attempt++ {
+		trace.Log("debug", "datalink", "link.handshake_attempt", "发送 UDP 握手", map[string]string{"attempt": fmt.Sprint(attempt + 1)})
 		if ctx.Err() != nil {
 			break
 		}
@@ -74,6 +83,7 @@ func OpenLink(ctx context.Context, host, identity string) (*Link, error) {
 		c.Close()
 		return nil, errors.New("相机未响应。请确认 Mac 已加入相机 Wi-Fi，手机 Mimo 已断开，并允许映桥访问本地网络")
 	}
+	trace.Log("info", "datalink", "link.handshake_ready", "UDP 握手完成", nil)
 	go l.run()
 	if err = l.send(Message{2, 0x48, 0, 0x80, 0, 0x81, appInfo()}); err != nil {
 		l.Close()
@@ -86,6 +96,7 @@ func OpenLink(ctx context.Context, host, identity string) (*Link, error) {
 	_ = l.command(3, 3, 0xda, hx("05ffffffff"))
 	// 回放模式必须由相机状态位确认，不能把发送成功当成连接完成。
 	for attempt := 0; attempt < 3; attempt++ {
+		trace.Log("debug", "datalink", "link.playback_attempt", "请求进入相机回放模式", map[string]string{"attempt": fmt.Sprint(attempt + 1)})
 		_ = l.command(1, 2, 0x0c, []byte{1, 1, 0, 1})
 		timer := time.NewTimer(time.Second)
 	waitPlayback:
@@ -111,6 +122,7 @@ func OpenLink(ctx context.Context, host, identity string) (*Link, error) {
 						l.Close()
 						return nil, ctx.Err()
 					case <-time.After(1800 * time.Millisecond):
+						trace.Log("info", "datalink", "link.playback_ready", "相机已确认进入回放模式", nil)
 						return l, nil
 					}
 				}
@@ -141,12 +153,17 @@ func (l *Link) send(m Message) error {
 	l.count++
 	_ = l.conn.SetWriteDeadline(time.Now().Add(time.Second))
 	_, err := l.conn.Write(packet)
+	if err != nil && time.Since(l.lastSendError) > 10*time.Second {
+		l.lastSendError = time.Now()
+		l.trace.Log("warn", "datalink", "link.command_failed", "相机命令发送失败", map[string]string{"command": fmt.Sprintf("%02x/%02x", m.Set, m.ID), "error": err.Error()})
+	}
 	return err
 }
 
 func (l *Link) run() {
 	defer close(l.done)
 	defer l.conn.Close()
+	defer l.trace.Log("info", "datalink", "link.closed", "相机数据链路已关闭", nil)
 	ack := time.NewTicker(100 * time.Millisecond)
 	defer ack.Stop()
 	beat := time.NewTicker(time.Second)
@@ -174,6 +191,9 @@ func (l *Link) run() {
 		if err != nil {
 			if e, ok := err.(net.Error); ok && e.Timeout() {
 				continue
+			}
+			if l.ctx.Err() == nil {
+				l.trace.Log("error", "datalink", "link.read_failed", "读取相机数据失败", map[string]string{"error": err.Error()})
 			}
 			return
 		}
@@ -233,6 +253,9 @@ func (l *Link) ListPage(ctx context.Context, storage int, cursor uint32) (Page, 
 	l.queryMu.Lock()
 	defer l.queryMu.Unlock()
 	page := Page{Files: []Media{}, Storage: storage, Cursor: cursor}
+	start := time.Now()
+	trace := l.trace
+	trace.Log("debug", "media", "media.page_start", "开始读取素材分页", map[string]string{"storage": fmt.Sprint(storage), "cursor": fmt.Sprint(cursor)})
 	if storage != 0 && storage != 1 {
 		return page, errors.New("无效存储")
 	}
@@ -300,6 +323,7 @@ func (l *Link) ListPage(ctx context.Context, storage int, cursor uint32) (Page, 
 				}
 			}
 		}
+		trace.Log("debug", "media", "media.page_ready", "素材分页接收完成", map[string]string{"storage": fmt.Sprint(storage), "records": fmt.Sprint(len(files)), "chunks": fmt.Sprint(len(chunks)), "elapsed_ms": fmt.Sprint(time.Since(start).Milliseconds())})
 		return page, nil
 	}
 	contiguous := func() bool {
@@ -324,6 +348,7 @@ func (l *Link) ListPage(ctx context.Context, storage int, cursor uint32) (Page, 
 		case <-l.done:
 			return page, errors.New("相机连接已中断，请重新连接")
 		case <-timer.C:
+			trace.Log("warn", "media", "media.page_timeout", "等待素材分页超时", map[string]string{"storage": fmt.Sprint(storage), "chunks": fmt.Sprint(len(chunks)), "started": fmt.Sprint(started), "counter": fmt.Sprint(counter)})
 			if started && len(chunks) == 0 {
 				return page, errors.New("该存储尚未就绪或未插入存储卡，请稍后刷新")
 			}
@@ -371,6 +396,7 @@ func (l *Link) List(ctx context.Context) ([]Media, string, error) {
 		for pageIndex := 0; pageIndex < 200; pageIndex++ {
 			p, err := l.ListPage(ctx, store, cursor)
 			if err != nil {
+				l.trace.Log("warn", "media", "media.store_failed", "读取存储中的素材未完成", map[string]string{"storage": fmt.Sprint(store), "error": err.Error()})
 				warnings = append(warnings, fmt.Sprintf("%s：%s", name, err))
 				break
 			}

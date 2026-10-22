@@ -1,0 +1,59 @@
+package platform
+
+import (
+	"context"
+	"errors"
+	"net/netip"
+	"time"
+)
+
+type WiFiSnapshot struct {
+	SSID      string
+	Interface string
+	Addresses []string
+}
+
+var cameraSubnet = netip.MustParsePrefix("192.168.2.0/24")
+
+// 相机固定服务地址为 192.168.2.1；不能把尚未完成 DHCP 的旧网段地址当成就绪。
+func cameraNetworkReady(snapshot WiFiSnapshot, expected string) (bool, string) {
+	if snapshot.Interface == "" {
+		return false, "没有可用的 Wi-Fi 网卡"
+	}
+	if expected != "" && snapshot.SSID != "" && snapshot.SSID != "<redacted>" && snapshot.SSID != expected {
+		return false, "Mac 仍连接其他 Wi-Fi，请先在系统菜单加入相机热点"
+	}
+	for _, raw := range snapshot.Addresses {
+		p, e := netip.ParsePrefix(raw)
+		if e != nil {
+			continue
+		}
+		ip := p.Addr().Unmap()
+		if cameraSubnet.Contains(ip) && ip.String() != "192.168.2.1" && ip.String() != "192.168.2.0" && ip.String() != "192.168.2.255" {
+			return true, ""
+		}
+	}
+	return false, "Mac 尚未获得相机网段的 IPv4 地址，请等待热点连接完成后继续"
+}
+
+func waitCameraNetwork(ctx context.Context, expected string, inspect func() WiFiSnapshot, interval time.Duration) error {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		ok, reason := cameraNetworkReady(inspect(), expected)
+		if ok {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				return errors.New(reason)
+			}
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
+}
