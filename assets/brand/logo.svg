@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" fill="none">
+  <title>映桥 · 双画幅跨接</title>
+  <desc>蓝色圆角方形内，两个错位的画幅通过一条白色斜向笔画相连，代表相机素材无线导入电脑。</desc>
+  <defs>
+    <linearGradient id="tile" x1="220" y1="100" x2="804" y2="924" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#3977F4"/>
+      <stop offset="0.5" stop-color="#245BDB"/>
+      <stop offset="1" stop-color="#163EA8"/>
+    </linearGradient>
+    <linearGradient id="edge" x1="512" y1="96" x2="512" y2="928" gradientUnits="userSpaceOnUse">
+      <stop stop-color="white" stop-opacity="0.32"/>
+      <stop offset="1" stop-color="white" stop-opacity="0.04"/>
+    </linearGradient>
+  </defs>
+  <rect x="96" y="108" width="832" height="820" rx="184" fill="#102E7A" fill-opacity="0.12"/>
+  <rect x="96" y="96" width="832" height="832" rx="184" fill="url(#tile)"/>
+  <rect x="99" y="99" width="826" height="826" rx="181" stroke="url(#edge)" stroke-width="6"/>
+  <g id="mark" stroke-width="68" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M550 410V376C550 345.072 524.928 320 494 320H350C319.072 320 294 345.072 294 376V502C294 532.928 319.072 558 350 558H406" stroke="white"/>
+    <path d="M618 466H674C704.928 466 730 491.072 730 522V648C730 678.928 704.928 704 674 704H530C499.072 704 474 678.928 474 648V614" stroke="#A6E8FF"/>
+    <path d="M414 432L610 592" stroke="white" stroke-width="76"/>
+  </g>
+</svg>

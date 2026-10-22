@@ -1,0 +1,145 @@
+package transfer
+
+import (
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"osmobridge/internal/camera"
+)
+
+var sample = bytes.Repeat([]byte("original-camera-media-"), 32768)
+
+func media() camera.Media {
+	return camera.Media{ID: "one", Name: "test.MP4", Path: "DCIM/DJI_001/test.MP4", Storage: 1, Size: int64(len(sample)), Date: "2026-10-22 12:00:00"}
+}
+func run(t *testing.T, server *httptest.Server, root string, progress func(Progress)) (Result, error) {
+	t.Helper()
+	return Download(context.Background(), Client(), strings.TrimPrefix(server.URL, "http://"), "camera-one", root, media(), progress)
+}
+
+func TestDownloadOriginalHashAndNoOverwrite(t *testing.T) {
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.ServeContent(w, r, "test.MP4", time.Time{}, bytes.NewReader(sample))
+	}))
+	defer s.Close()
+	root := t.TempDir()
+	r, e := run(t, s, root, func(Progress) {})
+	if e != nil {
+		t.Fatal(e)
+	}
+	want := sha256.Sum256(sample)
+	if r.SHA256 != hex.EncodeToString(want[:]) || r.Bytes != int64(len(sample)) {
+		t.Fatal(r)
+	}
+	b, _ := os.ReadFile(r.Path)
+	if !bytes.Equal(b, sample) {
+		t.Fatal("字节不一致")
+	}
+	if _, e = run(t, s, root, func(Progress) {}); e == nil {
+		t.Fatal("覆盖已有文件")
+	}
+}
+
+func TestPauseAndResumeExactBytes(t *testing.T) {
+	var resumed atomic.Bool
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Range") != "bytes=0-" {
+			resumed.Store(true)
+		}
+		http.ServeContent(w, r, "test.MP4", time.Time{}, bytes.NewReader(sample))
+	}))
+	defer s.Close()
+	root := t.TempDir()
+	ctx, cancel := context.WithCancel(context.Background())
+	_, e := Download(ctx, Client(), strings.TrimPrefix(s.URL, "http://"), "camera-one", root, media(), func(Progress) { cancel() })
+	if !errors.Is(e, context.Canceled) {
+		t.Fatalf("暂停未生效：%v", e)
+	}
+	r, e := run(t, s, root, func(Progress) {})
+	if e != nil {
+		t.Fatal(e)
+	}
+	b, _ := os.ReadFile(r.Path)
+	if !resumed.Load() || !bytes.Equal(b, sample) {
+		t.Fatal("续传数据不一致")
+	}
+}
+
+func TestServerIgnoringRangeRestartsSafely(t *testing.T) {
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Length", fmt.Sprint(len(sample)))
+		w.Write(sample)
+	}))
+	defer s.Close()
+	root := t.TempDir()
+	ctx, cancel := context.WithCancel(context.Background())
+	_, _ = Download(ctx, Client(), strings.TrimPrefix(s.URL, "http://"), "camera-one", root, media(), func(Progress) { cancel() })
+	r, e := run(t, s, root, func(Progress) {})
+	if e != nil {
+		t.Fatal(e)
+	}
+	b, _ := os.ReadFile(r.Path)
+	if !bytes.Equal(b, sample) {
+		t.Fatal("完整响应被错误追加")
+	}
+}
+
+func TestInvalidRangeAndTruncationNeverPublish(t *testing.T) {
+	for _, mode := range []string{"range", "truncated", "redirect"} {
+		t.Run(mode, func(t *testing.T) {
+			s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch mode {
+				case "range":
+					w.Header().Set("Content-Range", "bytes 20-29/30")
+					w.Header().Set("Content-Length", "10")
+					w.WriteHeader(206)
+					w.Write([]byte("0123456789"))
+				case "truncated":
+					w.Header().Set("Content-Length", fmt.Sprint(len(sample)))
+					w.Write([]byte("short"))
+				case "redirect":
+					http.Redirect(w, r, "http://example.invalid/private", 302)
+				}
+			}))
+			defer s.Close()
+			root := t.TempDir()
+			if _, e := run(t, s, root, func(Progress) {}); e == nil {
+				t.Fatal("错误响应被接受")
+			}
+			_ = filepath.WalkDir(root, func(p string, d os.DirEntry, e error) error {
+				if e == nil && !d.IsDir() && strings.HasSuffix(p, ".MP4") {
+					t.Fatal("发布了不完整文件")
+				}
+				return nil
+			})
+		})
+	}
+}
+
+func TestSymlinkCannotEscapeDestination(t *testing.T) {
+	root, outside := t.TempDir(), t.TempDir()
+	hash := sha256.Sum256([]byte("camera-one"))
+	if e := os.Symlink(outside, filepath.Join(root, hex.EncodeToString(hash[:6]))); e != nil {
+		t.Fatal(e)
+	}
+	_, e := Download(context.Background(), Client(), "127.0.0.1:1", "camera-one", root, media(), func(Progress) {})
+	if e == nil {
+		t.Fatal("符号链接越界")
+	}
+	entries, _ := os.ReadDir(outside)
+	if len(entries) != 0 {
+		t.Fatal("写入了目标目录之外")
+	}
+}

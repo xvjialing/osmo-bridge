@@ -1,0 +1,14 @@
+version: '3'
+tasks:
+  build:
+    summary: 构建 macOS 应用
+    cmds: [sh scripts/build.sh]
+  run:
+    summary: 启动已构建的应用
+    cmds: ['open "bin/Osmo Bridge.app"']
+  dev:
+    summary: 构建前端并运行开发版
+    cmds: [sh scripts/dev.sh]
+  test:
+    summary: 验证 Go 协议与下载逻辑
+    cmds: [sh scripts/env.sh go test -race ./...]

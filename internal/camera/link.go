@@ -1,0 +1,412 @@
+package camera
+
+import (
+	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"net"
+	"sort"
+	"sync"
+	"time"
+)
+
+type Link struct {
+	conn                 *net.UDPConn
+	mu                   sync.Mutex
+	session, seq, msgSeq uint16
+	count                byte
+	cursors              [3]uint16
+	ctx                  context.Context
+	cancel               context.CancelFunc
+	done                 chan struct{}
+	inbox                chan Message
+	queryMu              sync.Mutex
+	counter              uint16
+	playback             bool
+	lastSeen             time.Time
+}
+
+func hx(s string) []byte { b, _ := hex.DecodeString(s); return b }
+
+func OpenLink(ctx context.Context, host, identity string) (*Link, error) {
+	// HTTP 与 UDP 只访问用户直接连接的相机；不扫描其他网络设备。
+	if c, err := net.DialTimeout("tcp", net.JoinHostPort(host, "7001"), 1200*time.Millisecond); err == nil {
+		_ = c.SetWriteDeadline(time.Now().Add(time.Second))
+		_, _ = c.Write(Pairing(identity).Encode())
+		_ = c.Close()
+	}
+	a, err := net.ResolveUDPAddr("udp", net.JoinHostPort(host, "9004"))
+	if err != nil {
+		return nil, err
+	}
+	c, err := net.DialUDP("udp", nil, a)
+	if err != nil {
+		return nil, err
+	}
+	var seed [4]byte
+	_, _ = rand.Read(seed[:])
+	base := le.Uint16(seed[2:]) & 0xfff8
+	l := &Link{conn: c, session: le.Uint16(seed[:2]), seq: base + 8, msgSeq: 0xa000, cursors: [3]uint16{0, base, base}, done: make(chan struct{}), inbox: make(chan Message, 512), lastSeen: time.Now()}
+	l.ctx, l.cancel = context.WithCancel(context.Background())
+	body := hx("b88764006400c005140000640000019001c005140000640014006400c00514000064000101040102")
+	le.PutUint16(body, base)
+	buf := make([]byte, 65535)
+	connected := false
+	for range 15 {
+		if ctx.Err() != nil {
+			break
+		}
+		_, err = c.Write(Packet(0, l.session, 0, body))
+		if err != nil {
+			break
+		}
+		_ = c.SetReadDeadline(time.Now().Add(350 * time.Millisecond))
+		n, e := c.Read(buf)
+		if e == nil && validPacket(buf[:n], l.session) && buf[6] == 0 {
+			connected = true
+			break
+		}
+	}
+	if !connected {
+		l.cancel()
+		c.Close()
+		return nil, errors.New("相机未响应。请确认 Mac 已加入相机 Wi-Fi，手机 Mimo 已断开，并允许映桥访问本地网络")
+	}
+	go l.run()
+	if err = l.send(Message{2, 0x48, 0, 0x80, 0, 0x81, appInfo()}); err != nil {
+		l.Close()
+		return nil, err
+	}
+	if err = l.command(0x28, 0, 0x88, hx("170008237b41505000000000000002")); err != nil {
+		l.Close()
+		return nil, err
+	}
+	_ = l.command(3, 3, 0xda, hx("05ffffffff"))
+	// 回放模式必须由相机状态位确认，不能把发送成功当成连接完成。
+	for attempt := 0; attempt < 3; attempt++ {
+		_ = l.command(1, 2, 0x0c, []byte{1, 1, 0, 1})
+		timer := time.NewTimer(time.Second)
+	waitPlayback:
+		for {
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				l.Close()
+				return nil, ctx.Err()
+			case <-timer.C:
+				break waitPlayback
+			case <-l.done:
+				l.Close()
+				return nil, errors.New("相机连接已中断")
+			case <-l.inbox:
+				l.mu.Lock()
+				ok := l.playback
+				l.mu.Unlock()
+				if ok {
+					timer.Stop()
+					select {
+					case <-ctx.Done():
+						l.Close()
+						return nil, ctx.Err()
+					case <-time.After(1800 * time.Millisecond):
+						return l, nil
+					}
+				}
+			}
+		}
+	}
+	l.Close()
+	return nil, errors.New("尚未确认相机进入素材回放模式，请停止录制后重新连接")
+}
+
+func (l *Link) command(receiver, set, id byte, payload []byte) error {
+	return l.send(Message{Sender: 2, Receiver: receiver, Flags: 0x40, Set: set, ID: id, Payload: payload})
+}
+func (l *Link) send(m Message) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if m.Seq == 0 {
+		m.Seq = l.msgSeq
+		l.msgSeq++
+	}
+	b := make([]byte, 12)
+	le.PutUint16(b, l.seq-8)
+	le.PutUint16(b[2:], l.seq)
+	b[8] = l.count
+	b[9] = 1
+	packet := Packet(5, l.session, l.seq, append(b, m.Encode()...))
+	l.seq += 8
+	l.count++
+	_ = l.conn.SetWriteDeadline(time.Now().Add(time.Second))
+	_, err := l.conn.Write(packet)
+	return err
+}
+
+func (l *Link) run() {
+	defer close(l.done)
+	defer l.conn.Close()
+	ack := time.NewTicker(100 * time.Millisecond)
+	defer ack.Stop()
+	beat := time.NewTicker(time.Second)
+	defer beat.Stop()
+	buf := make([]byte, 65535)
+	for {
+		select {
+		case <-l.ctx.Done():
+			return
+		case <-ack.C:
+			b := make([]byte, 26)
+			l.mu.Lock()
+			for i, v := range l.cursors {
+				le.PutUint16(b[i*8:], v)
+				le.PutUint16(b[i*8+2:], v)
+			}
+			l.mu.Unlock()
+			_, _ = l.conn.Write(Packet(4, l.session, 0, b))
+		case <-beat.C:
+			_ = l.command(0x28, 0, 0x88, hx("170008237b41505000000000000002"))
+		default:
+		}
+		_ = l.conn.SetReadDeadline(time.Now().Add(70 * time.Millisecond))
+		n, err := l.conn.Read(buf)
+		if err != nil {
+			if e, ok := err.(net.Error); ok && e.Timeout() {
+				continue
+			}
+			return
+		}
+		b := buf[:n]
+		if !validPacket(b, l.session) {
+			continue
+		}
+		l.mu.Lock()
+		l.lastSeen = time.Now()
+		if b[6] == 1 && n >= 34 {
+			l.cursors = [3]uint16{le.Uint16(b[10:]), le.Uint16(b[18:]), le.Uint16(b[26:])}
+		} else if b[6] == 3 {
+			l.cursors[1] = le.Uint16(b[4:])
+		}
+		l.mu.Unlock()
+		var r Reader
+		for _, m := range r.Feed(b[8:]) {
+			if m.Flags&0xc0 == 0x40 {
+				p := []byte{0}
+				if m.Set == 0 && m.ID == 0x81 {
+					p = appInfo()
+				}
+				if m.Set == 0 && m.ID == 0x88 && len(m.Payload) > 0 && m.Payload[0] == 0x19 {
+					p = hx("1a00000000")
+				}
+				_ = l.send(Message{2, m.Sender, m.Seq, 0x80, m.Set, m.ID, p})
+			}
+			if m.Set == 2 && m.ID == 0x80 && len(m.Payload) >= 4 {
+				l.mu.Lock()
+				l.playback = le.Uint32(m.Payload)&0x40000000 != 0
+				l.mu.Unlock()
+			}
+			select {
+			case l.inbox <- m:
+			default:
+			}
+		}
+	}
+}
+
+func (l *Link) Alive() bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return time.Since(l.lastSeen) < 8*time.Second && l.ctx.Err() == nil
+}
+func (l *Link) Close() {
+	if l == nil {
+		return
+	}
+	_ = l.command(1, 2, 0x0c, []byte{1, 1, 0, 0})
+	l.cancel()
+	_ = l.conn.Close()
+	<-l.done
+}
+
+func (l *Link) ListPage(ctx context.Context, storage int, cursor uint32) (Page, error) {
+	l.queryMu.Lock()
+	defer l.queryMu.Unlock()
+	page := Page{Files: []Media{}, Storage: storage, Cursor: cursor}
+	if storage != 0 && storage != 1 {
+		return page, errors.New("无效存储")
+	}
+	if cursor == 0 {
+		cursor = 1
+		if storage == 1 {
+			cursor |= 0x40000000
+		}
+	}
+	if cursor != 1 && cursor != 0x40000001 {
+		l.counter++
+		first := uint32(1)
+		if storage == 1 {
+			first |= 0x40000000
+		}
+		if err := l.command(1, 0, 0x26, listPayload(l.counter, first)); err != nil {
+			return page, err
+		}
+		trigger := hx("4a040e1001000000000001000000")
+		le.PutUint32(trigger[4:], uint32(l.counter))
+		le.PutUint32(trigger[10:], first)
+		if err := l.command(1, 0, 0x26, trigger); err != nil {
+			return page, err
+		}
+	}
+	l.counter++
+	counter := l.counter
+	if err := l.command(1, 0, 0x26, listPayload(counter, cursor)); err != nil {
+		return page, err
+	}
+	timer := time.NewTimer(9 * time.Second)
+	defer timer.Stop()
+	settle := time.NewTicker(150 * time.Millisecond)
+	defer settle.Stop()
+	chunks := map[uint16][]byte{}
+	seen := map[uint16]bool{}
+	last := -1
+	ended := time.Time{}
+	started := false
+	finish := func() (Page, error) {
+		keys := make([]int, 0, len(chunks))
+		for k := range chunks {
+			keys = append(keys, int(k))
+		}
+		sort.Ints(keys)
+		raw := []byte{}
+		for _, k := range keys {
+			raw = append(raw, chunks[uint16(k)]...)
+		}
+		files, e := ParseManifest(raw, storage)
+		if e != nil {
+			return page, e
+		}
+		if len(raw) > 16 && len(files) == 0 {
+			return page, errors.New("相机返回了无法识别的素材列表，未将其当作空相册")
+		}
+		page.Files = files
+		page.Complete = len(files) < 45
+		page.Cursor = cursor
+		if len(files) > 0 {
+			page.Cursor = files[0].Handle
+			for _, f := range files {
+				if f.Handle < page.Cursor {
+					page.Cursor = f.Handle
+				}
+			}
+		}
+		return page, nil
+	}
+	contiguous := func() bool {
+		if len(seen) == 0 {
+			return false
+		}
+		end := len(seen) - 1
+		if last >= 0 {
+			end = last
+		}
+		for i := 0; i <= end; i++ {
+			if !seen[uint16(i)] {
+				return false
+			}
+		}
+		return true
+	}
+	for {
+		select {
+		case <-ctx.Done():
+			return page, ctx.Err()
+		case <-l.done:
+			return page, errors.New("相机连接已中断，请重新连接")
+		case <-timer.C:
+			if started && len(chunks) == 0 {
+				return page, errors.New("该存储尚未就绪或未插入存储卡，请稍后刷新")
+			}
+			return page, errors.New("素材列表接收不完整，请刷新重试")
+		case <-settle.C:
+			if !ended.IsZero() && time.Since(ended) > 600*time.Millisecond && contiguous() {
+				return finish()
+			}
+		case m := <-l.inbox:
+			if m.Set != 0 || m.ID != 0x27 || len(m.Payload) < 10 {
+				continue
+			}
+			p := m.Payload
+			if p[0] != 0x4a || le.Uint16(p[4:]) != counter {
+				continue
+			}
+			seq := le.Uint16(p[6:])
+			switch p[1] {
+			case 4:
+				started = true
+				seen[seq] = true
+			case 1:
+				seen[seq] = true
+				chunks[seq] = append([]byte(nil), p[10:]...)
+				if le.Uint16(p[2:])&0x1000 != 0 {
+					last = int(seq)
+				}
+			case 3:
+				ended = time.Now()
+			}
+			if last >= 0 && contiguous() {
+				return finish()
+			}
+		}
+	}
+}
+
+func (l *Link) List(ctx context.Context) ([]Media, string, error) {
+	files := []Media{}
+	warnings := []string{}
+	seen := map[string]bool{}
+	for _, store := range []int{1, 0} {
+		cursor := uint32(0)
+		name := map[int]string{0: "SD 卡", 1: "内置存储"}[store]
+		for pageIndex := 0; pageIndex < 200; pageIndex++ {
+			p, err := l.ListPage(ctx, store, cursor)
+			if err != nil {
+				warnings = append(warnings, fmt.Sprintf("%s：%s", name, err))
+				break
+			}
+			added := 0
+			for _, m := range p.Files {
+				if !seen[m.ID] {
+					seen[m.ID] = true
+					files = append(files, m)
+					added++
+				}
+			}
+			if p.Complete {
+				break
+			}
+			if added == 0 || p.Cursor == cursor {
+				warnings = append(warnings, name+"分页未前进，当前列表可能不完整，请刷新重试")
+				break
+			}
+			cursor = p.Cursor
+			if pageIndex == 199 {
+				warnings = append(warnings, name+"素材数量超过单次读取上限，当前列表可能不完整")
+			}
+		}
+	}
+	if len(files) == 0 && len(warnings) == 2 {
+		return files, "", errors.New(joinWarnings(warnings))
+	}
+	return files, joinWarnings(warnings), nil
+}
+func joinWarnings(w []string) string {
+	s := ""
+	for _, v := range w {
+		if s != "" {
+			s += "；"
+		}
+		s += v
+	}
+	return s
+}

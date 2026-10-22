@@ -1,0 +1,1 @@
+{"profile":"product-admin","sourceRoots":["frontend/src"],"locale":"zh-CN","canonicalMap":"UX-CONTRACT.md","requiredCapabilities":["Table Selection","Form","Scrollbar","Toast"],"requiredCommands":["typecheck","build"],"commands":{"typecheck":"npm --prefix frontend run typecheck","build":"npm --prefix frontend run build"}}

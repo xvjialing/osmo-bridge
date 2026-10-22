@@ -1,0 +1,54 @@
+# 本地依赖、工具缓存与 Git worktree
+/.cache/
+/.tools/
+/.worktrees/
+node_modules/
+
+# 应用构建产物
+/bin/
+/osmobridge
+/osmo-bridge
+/frontend/dist/
+*.tsbuildinfo
+*.test
+/__debug_bin*
+
+# 自动生成的多尺寸图标中间文件
+# 保留 build/Info.plist、appicon.png 和 appicon.icns，不能忽略整个 build/。
+/build/*.iconset/
+
+# 测试、性能分析与浏览器检查产物
+/coverage/
+coverage.out
+*.prof
+/frontend/test-results/
+/frontend/playwright-report/
+/.playwright-cli/
+/output/
+/outputs/
+
+# 本地环境配置，保留可共享的配置示例
+.env
+.env.*
+!.env.example
+!.env.*.example
+!.env.sample
+!.env.template
+
+# 日志与编辑器临时文件
+*.log
+*.tmp
+*.swp
+*.swo
+*~
+/.idea/
+/.vscode/*.local.json
+*.code-workspace
+
+# macOS 文件系统元数据
+.DS_Store
+._*
+.AppleDouble/
+.LSOverride
+
+# go.mod、go.sum、package-lock.json、前端 bindings 与源代码保持可跟踪。
