@@ -339,6 +339,65 @@ textarea {
   color: var(--primary);
   font-weight: 600;
 }
+.library-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+.view-switch {
+  padding: 3px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+.view-switch .filter {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+}
+.view-switch .filter:active {
+  background: var(--accent);
+}
+.timeline-order {
+  margin: 0 0 20px;
+  color: var(--muted-foreground);
+  font-size: 11px;
+}
+.timeline-day {
+  position: relative;
+  padding: 0 0 26px 18px;
+  border-left: 1px solid var(--border);
+}
+.timeline-day:last-child {
+  padding-bottom: 0;
+}
+.timeline-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.timeline-heading::before {
+  content: "";
+  position: absolute;
+  top: 7px;
+  left: -4px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--primary);
+}
+.timeline-heading h3 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+.timeline-heading > span {
+  color: var(--muted-foreground);
+  font-size: 11px;
+}
 .search {
   position: relative;
   flex: 1;
@@ -853,6 +912,9 @@ progress::-moz-progress-bar {
   .toolbar,
   .library-footer {
     padding: 14px;
+  }
+  .library-header {
+    flex-wrap: wrap;
   }
   .library-body {
     padding: 14px;

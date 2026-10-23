@@ -15,6 +15,8 @@ import {
   Image as ImageIcon,
   Info,
   Laptop,
+  LayoutGrid,
+  CalendarDays,
   Library,
   LoaderCircle,
   Pause,
@@ -22,7 +24,6 @@ import {
   Settings2,
   ShieldCheck,
   Unplug,
-  Video,
   Wifi,
   X,
   AlertCircle,
@@ -32,6 +33,8 @@ import { ConnectionDialog } from "@/components/connection-dialog";
 import { SettingsPage } from "@/components/settings-page";
 import { SearchField } from "@/components/search-field";
 import { MediaPreview } from "@/components/media-preview";
+import { MediaCard } from "@/components/media-card";
+import { groupByCaptureDay, sortByCaptureDate } from "@/lib/media-timeline";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
@@ -43,11 +46,8 @@ import {
 import {
   bytes,
   call,
-  duration,
   emptyState,
   errorMessage,
-  mediaSource,
-  type Media,
   type State,
   type Task,
 } from "@/lib/bridge";
@@ -59,29 +59,6 @@ const labels: Record<string, string> = {
   failed: "下载失败",
   completed: "已完成",
 };
-
-function Thumbnail({ media }: { media: Media }) {
-  const [failed, setFailed] = useState(false);
-  return (
-    <div className="media-visual">
-      {media.thumb && !failed ? (
-        <img
-          loading="lazy"
-          alt=""
-          src={mediaSource(media, "thumbnail")}
-          onError={() => setFailed(true)}
-        />
-      ) : media.kind === "video" ? (
-        <Video aria-hidden="true" />
-      ) : (
-        <ImageIcon aria-hidden="true" />
-      )}
-      <span className="media-kind">
-        {media.kind === "video" ? duration(media.duration) : "照片"}
-      </span>
-    </div>
-  );
-}
 
 function TaskItem({
   task,
@@ -160,6 +137,8 @@ export default function App() {
   const [kind, setKind] = useState("all");
   const [storage, setStorage] = useState(-1);
   const [page, setPage] = useState(1);
+  const [layout, setLayout] = useState<"grid" | "timeline">("grid");
+  const libraryBody = useRef<HTMLDivElement>(null);
   const [selection, setSelection] = useState<Set<string>>(new Set());
   const [settingsDirty, setSettingsDirty] = useState(false);
   const [pendingView, setPendingView] = useState<
@@ -263,9 +242,14 @@ export default function App() {
       ),
     [state.media, kind, storage, query],
   );
-  const totalPages = Math.max(1, Math.ceil(filtered.length / 24));
+  const ordered = useMemo(
+    () => (layout === "timeline" ? sortByCaptureDate(filtered) : filtered),
+    [filtered, layout],
+  );
+  const totalPages = Math.max(1, Math.ceil(ordered.length / 24));
   const currentPage = Math.min(page, totalPages);
-  const visible = filtered.slice((currentPage - 1) * 24, currentPage * 24);
+  const visible = ordered.slice((currentPage - 1) * 24, currentPage * 24);
+  const timelineGroups = groupByCaptureDay(visible);
   const allSelected =
     visible.length > 0 && visible.every((m) => selection.has(m.id));
   const selectedBytes = state.media
@@ -490,25 +474,55 @@ export default function App() {
                   </p>
                 </div>
                 {view === "library" && (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    disabled={!connected || busy}
-                    aria-label="刷新素材列表"
-                    onClick={() =>
-                      void perform("refresh", async () => {
-                        await call("Refresh");
-                        setThumbnailRevision((n) => n + 1);
-                        setSelection(new Set());
-                        setPage(1);
-                      })
-                    }
-                  >
-                    <RefreshCw
-                      className={action === "refresh" ? "animate-spin" : ""}
-                    />
-                    刷新
-                  </Button>
+                  <div className="library-actions">
+                    <div
+                      className="filter-group view-switch"
+                      role="group"
+                      aria-label="素材展示方式"
+                    >
+                      {(
+                        [
+                          ["grid", "网格", LayoutGrid],
+                          ["timeline", "时间线", CalendarDays],
+                        ] as const
+                      ).map(([value, label, Icon]) => (
+                        <button
+                          key={value}
+                          type="button"
+                          className="filter"
+                          aria-pressed={layout === value}
+                          onClick={() => {
+                            if (layout === value) return;
+                            setLayout(value);
+                            setPage(1);
+                            libraryBody.current?.scrollTo({ top: 0 });
+                          }}
+                        >
+                          <Icon size={14} aria-hidden="true" />
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={!connected || busy}
+                      aria-label="刷新素材列表"
+                      onClick={() =>
+                        void perform("refresh", async () => {
+                          await call("Refresh");
+                          setThumbnailRevision((n) => n + 1);
+                          setSelection(new Set());
+                          setPage(1);
+                        })
+                      }
+                    >
+                      <RefreshCw
+                        className={action === "refresh" ? "animate-spin" : ""}
+                      />
+                      刷新
+                    </Button>
+                  </div>
                 )}
               </div>
               {view === "library" && (
@@ -564,7 +578,7 @@ export default function App() {
                   ))}
                 </div>
               )}
-              <div className="library-body">
+              <div className="library-body" ref={libraryBody}>
                 {view === "history" ? (
                   completed.length ? (
                     <table className="history-table">
@@ -706,52 +720,61 @@ export default function App() {
                   </div>
                 ) : (
                   <>
-                    <div className="media-grid">
-                      {visible.map((m) => (
-                        <article
-                          key={m.id}
-                          className={`media-card ${selection.has(m.id) ? "selected" : ""}`}
-                        >
-                          <button
-                            className="media-preview-trigger"
-                            aria-label={`预览 ${m.name}`}
-                            onClick={(e) => showPreview(m.id, e.currentTarget)}
+                    {layout === "timeline" ? (
+                      <div
+                        className="media-timeline"
+                        aria-label="按拍摄时间排列的素材"
+                      >
+                        <p className="timeline-order">
+                          按拍摄时间从新到旧 · 相机本地时间
+                        </p>
+                        {timelineGroups.map((group) => (
+                          <section
+                            key={group.day}
+                            className="timeline-day"
+                            aria-label={group.label}
                           >
-                            <Thumbnail
-                              key={`${m.id}-${thumbnailRevision}`}
-                              media={m}
-                            />
-                          </button>
-                          <div className="media-check">
-                            <Checkbox
-                              checked={selection.has(m.id)}
-                              aria-label={`选择 ${m.name}`}
-                              onCheckedChange={() => toggle(m.id)}
-                            />
-                          </div>
-                          <div className="media-info">
-                            <button
-                              className="media-name media-name-button"
-                              title={m.name}
-                              onClick={(e) =>
-                                showPreview(m.id, e.currentTarget)
-                              }
-                            >
-                              <span>{m.name}</span>
-                            </button>
-                            <div className="media-meta">
-                              <span>{bytes(m.size)}</span>
-                              <span>
-                                {m.storage === 1 ? "内置存储" : "SD 卡"}
-                              </span>
+                            <div className="timeline-heading">
+                              <h3>
+                                {group.day === "unknown" ? (
+                                  group.label
+                                ) : (
+                                  <time dateTime={group.day}>
+                                    {group.label}
+                                  </time>
+                                )}
+                              </h3>
+                              <span>本页 {group.media.length} 项</span>
                             </div>
-                            <div className="media-date">
-                              {m.date || "拍摄时间未知"}
+                            <div className="media-grid">
+                              {group.media.map((m) => (
+                                <MediaCard
+                                  key={m.id}
+                                  media={m}
+                                  selected={selection.has(m.id)}
+                                  thumbnailRevision={thumbnailRevision}
+                                  onPreview={showPreview}
+                                  onToggle={toggle}
+                                />
+                              ))}
                             </div>
-                          </div>
-                        </article>
-                      ))}
-                    </div>
+                          </section>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="media-grid">
+                        {visible.map((m) => (
+                          <MediaCard
+                            key={m.id}
+                            media={m}
+                            selected={selection.has(m.id)}
+                            thumbnailRevision={thumbnailRevision}
+                            onPreview={showPreview}
+                            onToggle={toggle}
+                          />
+                        ))}
+                      </div>
+                    )}
                     <nav className="pagination" aria-label="素材分页">
                       <Button
                         size="icon"

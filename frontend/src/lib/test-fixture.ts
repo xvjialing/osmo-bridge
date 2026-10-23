@@ -46,6 +46,20 @@ if (scenario === "cards" && state.media.length >= 3) {
   state.media[1].name =
     "TEST_很长的素材文件名_需要换行并保持下方信息对齐_0002.MP4";
 }
+if (scenario === "timeline") {
+  // 故意打乱日期，覆盖跨日、同日时间、分页、未知及无效日期。
+  const dates = [
+    "2026-10-21 08:15:00",
+    "2026-10-23 00:05:00",
+    "",
+    "2026-10-22 23:55:00",
+    "2026-10-23 18:30:00",
+    "2026-02-30 12:00:00",
+  ];
+  state.media.forEach((media, i) => {
+    media.date = dates[i % dates.length];
+  });
+}
 const logInfo: LogInfo = {
   settings: { retentionDays: 7, level: "info" },
   directory: "/测试目录/OsmoBridge/logs",
