@@ -26,9 +26,18 @@ type Link struct {
 	queryMu              sync.Mutex
 	counter              uint16
 	playback             bool
+	playbackVersion      uint64
 	lastSeen             time.Time
 	trace                diagnostics.Trace
 	lastSendError        time.Time
+	unacked              []pendingCommand
+	acksSeen             bool
+}
+
+type pendingCommand struct {
+	seq             uint16
+	packet          []byte
+	firstSent, sent time.Time
 }
 
 func hx(s string) []byte { b, _ := hex.DecodeString(s); return b }
@@ -94,43 +103,58 @@ func OpenLink(ctx context.Context, host, identity string) (*Link, error) {
 		return nil, err
 	}
 	_ = l.command(3, 3, 0xda, hx("05ffffffff"))
+	if err = l.enterPlayback(ctx); err != nil {
+		l.Close()
+		return nil, err
+	}
+	return l, nil
+}
+
+func (l *Link) enterPlayback(ctx context.Context) error {
 	// 回放模式必须由相机状态位确认，不能把发送成功当成连接完成。
+	l.mu.Lock()
+	version := l.playbackVersion
+	l.mu.Unlock()
 	for attempt := 0; attempt < 3; attempt++ {
-		trace.Log("debug", "datalink", "link.playback_attempt", "请求进入相机回放模式", map[string]string{"attempt": fmt.Sprint(attempt + 1)})
-		_ = l.command(1, 2, 0x0c, []byte{1, 1, 0, 1})
+		l.trace.Log("debug", "datalink", "link.playback_attempt", "请求进入相机回放模式", map[string]string{"attempt": fmt.Sprint(attempt + 1)})
+		if err := l.command(1, 2, 0x0c, []byte{1, 1, 0, 1}); err != nil {
+			return err
+		}
 		timer := time.NewTimer(time.Second)
 	waitPlayback:
 		for {
 			select {
 			case <-ctx.Done():
 				timer.Stop()
-				l.Close()
-				return nil, ctx.Err()
+				return ctx.Err()
 			case <-timer.C:
 				break waitPlayback
 			case <-l.done:
-				l.Close()
-				return nil, errors.New("相机连接已中断")
-			case <-l.inbox:
+				timer.Stop()
+				return errors.New("相机连接已中断")
+			case m := <-l.inbox:
+				if m.Set != 2 || m.ID != 0x80 || len(m.Payload) < 4 {
+					continue
+				}
 				l.mu.Lock()
-				ok := l.playback
+				ok := l.playback && l.playbackVersion > version
 				l.mu.Unlock()
 				if ok {
 					timer.Stop()
 					select {
 					case <-ctx.Done():
-						l.Close()
-						return nil, ctx.Err()
+						return ctx.Err()
+					case <-l.done:
+						return errors.New("相机连接已中断")
 					case <-time.After(1800 * time.Millisecond):
-						trace.Log("info", "datalink", "link.playback_ready", "相机已确认进入回放模式", nil)
-						return l, nil
+						l.trace.Log("info", "datalink", "link.playback_ready", "相机已确认进入回放模式", nil)
+						return nil
 					}
 				}
 			}
 		}
 	}
-	l.Close()
-	return nil, errors.New("尚未确认相机进入素材回放模式，请停止录制后重新连接")
+	return errors.New("尚未确认相机进入素材回放模式，请停止录制后重新连接")
 }
 
 func (l *Link) command(receiver, set, id byte, payload []byte) error {
@@ -149,15 +173,55 @@ func (l *Link) send(m Message) error {
 	b[8] = l.count
 	b[9] = 1
 	packet := Packet(5, l.session, l.seq, append(b, m.Encode()...))
-	l.seq += 8
-	l.count++
 	_ = l.conn.SetWriteDeadline(time.Now().Add(time.Second))
 	_, err := l.conn.Write(packet)
+	if err == nil {
+		now := time.Now()
+		l.unacked = append(l.unacked, pendingCommand{l.seq, packet, now, now})
+		// 只保留有界的重传窗口；对端持续不确认时由清单超时提示重连。
+		if len(l.unacked) > 256 {
+			l.unacked = l.unacked[len(l.unacked)-256:]
+		}
+		l.seq += 8
+		l.count++
+	}
 	if err != nil && time.Since(l.lastSendError) > 10*time.Second {
 		l.lastSendError = time.Now()
 		l.trace.Log("warn", "datalink", "link.command_failed", "相机命令发送失败", map[string]string{"command": fmt.Sprintf("%02x/%02x", m.Set, m.ID), "error": err.Error()})
 	}
 	return err
+}
+
+// 命令按前驱序号串联；一个 UDP 包丢失会使后续命令全部失效，必须原序重传。
+func (l *Link) acknowledge(cursor uint16) {
+	for i, pending := range l.unacked {
+		if pending.seq == cursor {
+			l.unacked = l.unacked[i+1:]
+			l.acksSeen = true
+			return
+		}
+	}
+}
+
+func (l *Link) resendPending() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if !l.acksSeen || len(l.unacked) == 0 {
+		return
+	}
+	now := time.Now()
+	first := l.unacked[0]
+	if now.Sub(first.sent) < 300*time.Millisecond || now.Sub(first.firstSent) > 5*time.Second {
+		return
+	}
+	l.trace.Log("debug", "datalink", "link.commands_resent", "重传相机尚未确认的命令", map[string]string{"count": fmt.Sprint(len(l.unacked)), "sequence": fmt.Sprint(first.seq)})
+	for i := range l.unacked {
+		_ = l.conn.SetWriteDeadline(now.Add(time.Second))
+		if _, err := l.conn.Write(l.unacked[i].packet); err != nil {
+			return
+		}
+		l.unacked[i].sent = now
+	}
 }
 
 func (l *Link) run() {
@@ -182,6 +246,7 @@ func (l *Link) run() {
 			}
 			l.mu.Unlock()
 			_, _ = l.conn.Write(Packet(4, l.session, 0, b))
+			l.resendPending()
 		case <-beat.C:
 			_ = l.command(0x28, 0, 0x88, hx("170008237b41505000000000000002"))
 		default:
@@ -205,6 +270,7 @@ func (l *Link) run() {
 		l.lastSeen = time.Now()
 		if b[6] == 1 && n >= 34 {
 			l.cursors = [3]uint16{le.Uint16(b[10:]), le.Uint16(b[18:]), le.Uint16(b[26:])}
+			l.acknowledge(l.cursors[2])
 		} else if b[6] == 3 {
 			l.cursors[1] = le.Uint16(b[4:])
 		}
@@ -224,6 +290,7 @@ func (l *Link) run() {
 			if m.Set == 2 && m.ID == 0x80 && len(m.Payload) >= 4 {
 				l.mu.Lock()
 				l.playback = le.Uint32(m.Payload)&0x40000000 != 0
+				l.playbackVersion++
 				l.mu.Unlock()
 			}
 			select {
@@ -252,6 +319,10 @@ func (l *Link) Close() {
 func (l *Link) ListPage(ctx context.Context, storage int, cursor uint32) (Page, error) {
 	l.queryMu.Lock()
 	defer l.queryMu.Unlock()
+	return l.listPage(ctx, storage, cursor)
+}
+
+func (l *Link) listPage(ctx context.Context, storage int, cursor uint32) (Page, error) {
 	page := Page{Files: []Media{}, Storage: storage, Cursor: cursor}
 	start := time.Now()
 	trace := l.trace
@@ -295,7 +366,7 @@ func (l *Link) ListPage(ctx context.Context, storage int, cursor uint32) (Page, 
 	last := -1
 	ended := time.Time{}
 	started := false
-	finish := func() (Page, error) {
+	assemble := func() []byte {
 		keys := make([]int, 0, len(chunks))
 		for k := range chunks {
 			keys = append(keys, int(k))
@@ -305,9 +376,23 @@ func (l *Link) ListPage(ctx context.Context, storage int, cursor uint32) (Page, 
 		for _, k := range keys {
 			raw = append(raw, chunks[uint16(k)]...)
 		}
+		return raw
+	}
+	finish := func() (Page, error) {
+		raw := assemble()
+		if len(raw) < 12 {
+			return page, errors.New("相机返回的素材列表头不完整，请刷新重试")
+		}
 		files, e := ParseManifest(raw, storage)
 		if e != nil {
 			return page, e
+		}
+		// 部分机型会提供本页记录数；不能把截断后仍能解析的前几条当成完整分页。
+		if len(raw) >= 4 {
+			declared := le.Uint32(raw)
+			if declared > 0 && declared != uint32(len(files)) {
+				return page, errors.New("素材列表记录数不完整，请刷新重试")
+			}
 		}
 		if len(raw) > 16 && len(files) == 0 {
 			return page, errors.New("相机返回了无法识别的素材列表，未将其当作空相册")
@@ -348,14 +433,31 @@ func (l *Link) ListPage(ctx context.Context, storage int, cursor uint32) (Page, 
 		case <-l.done:
 			return page, errors.New("相机连接已中断，请重新连接")
 		case <-timer.C:
-			trace.Log("warn", "media", "media.page_timeout", "等待素材分页超时", map[string]string{"storage": fmt.Sprint(storage), "chunks": fmt.Sprint(len(chunks)), "started": fmt.Sprint(started), "counter": fmt.Sprint(counter)})
+			trace.Log("warn", "media", "media.page_timeout", "等待素材分页超时", map[string]string{"storage": fmt.Sprint(storage), "chunks": fmt.Sprint(len(chunks)), "started": fmt.Sprint(started), "counter": fmt.Sprint(counter), "ended": fmt.Sprint(!ended.IsZero()), "last_sequence": fmt.Sprint(last)})
 			if started && len(chunks) == 0 {
 				return page, errors.New("该存储尚未就绪或未插入存储卡，请稍后刷新")
+			}
+			if !started && len(chunks) == 0 {
+				return page, errors.New("相机未响应素材查询，请断开后重新连接")
 			}
 			return page, errors.New("素材列表接收不完整，请刷新重试")
 		case <-settle.C:
 			if !ended.IsZero() && time.Since(ended) > 600*time.Millisecond && contiguous() {
-				return finish()
+				// 未标记末片时，只接受明确的空页或记录数已齐的分页；不能仅凭短暂静默结束。
+				raw := assemble()
+				if len(raw) >= 12 && len(raw) <= 16 && le.Uint32(raw) == 0 {
+					return finish()
+				}
+				if len(raw) < 4 {
+					continue
+				}
+				declared := le.Uint32(raw)
+				if declared > 0 {
+					files, err := ParseManifest(raw, storage)
+					if err == nil && uint32(len(files)) == declared {
+						return finish()
+					}
+				}
 			}
 		case m := <-l.inbox:
 			if m.Set != 0 || m.ID != 0x27 || len(m.Payload) < 10 {
@@ -377,9 +479,12 @@ func (l *Link) ListPage(ctx context.Context, storage int, cursor uint32) (Page, 
 					last = int(seq)
 				}
 			case 3:
-				ended = time.Now()
+				// 结束帧的序号恒为 0，可能先于数据到达或重复推送，不能当成数据末序号。
+				if ended.IsZero() {
+					ended = time.Now()
+				}
 			}
-			if last >= 0 && contiguous() {
+			if !ended.IsZero() && last >= 0 && contiguous() {
 				return finish()
 			}
 		}
@@ -387,6 +492,21 @@ func (l *Link) ListPage(ctx context.Context, storage int, cursor uint32) (Page, 
 }
 
 func (l *Link) List(ctx context.Context) ([]Media, string, error) {
+	l.queryMu.Lock()
+	defer l.queryMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return nil, "", err
+	}
+	// 刷新复用现有连接，但重新宣布应用身份并确认回放，避免长会话或模式变化后静默丢弃查询。
+	if err := l.send(Message{2, 0x48, 0, 0x80, 0, 0x81, appInfo()}); err != nil {
+		return nil, "", err
+	}
+	if err := l.command(0x28, 0, 0x88, hx("170008237b41505000000000000002")); err != nil {
+		return nil, "", err
+	}
+	if err := l.enterPlayback(ctx); err != nil {
+		return nil, "", err
+	}
 	files := []Media{}
 	warnings := []string{}
 	seen := map[string]bool{}
@@ -394,7 +514,7 @@ func (l *Link) List(ctx context.Context) ([]Media, string, error) {
 		cursor := uint32(0)
 		name := map[int]string{0: "SD 卡", 1: "内置存储"}[store]
 		for pageIndex := 0; pageIndex < 200; pageIndex++ {
-			p, err := l.ListPage(ctx, store, cursor)
+			p, err := l.listPage(ctx, store, cursor)
 			if err != nil {
 				l.trace.Log("warn", "media", "media.store_failed", "读取存储中的素材未完成", map[string]string{"storage": fmt.Sprint(store), "error": err.Error()})
 				warnings = append(warnings, fmt.Sprintf("%s：%s", name, err))

@@ -32,7 +32,7 @@
 
 ## 构建与启动
 
-需要 macOS 13 或更新版本、Xcode Command Line Tools、Go 1.27.0、Node.js 24。当前构建产物为本机架构（Apple Silicon）。
+需要 macOS 13 或更新版本、Xcode Command Line Tools、Go 1.27.0、Node.js 24、pnpm 12.9.1（版本固定在 `frontend/package.json`）。当前构建产物为本机架构（Apple Silicon）。
 
 ```sh
 cd /Users/xvjialing/projects/osmo-bridge
@@ -43,7 +43,9 @@ open "bin/Osmo Bridge.app"
 
 依赖已安装时可直接执行 `sh scripts/build.sh`。开发运行：`sh scripts/dev.sh`，会构建前端与带图标的 `bin/dev/Osmo Bridge.app` 并启动，让系统权限正确归属应用。
 
-Wails CLI 保存在 `.tools/wails3`，也可以运行 `sh scripts/env.sh .tools/wails3 task build`。工具缓存集中在 `.cache`，不提交到版本控制。
+Wails CLI 保存在 `.tools/wails3`，也可以运行 `sh scripts/env.sh .tools/wails3 task build`。Go 工具缓存集中在 `.cache`；前端使用 pnpm 默认共享存储复用依赖，不单独建立项目内依赖缓存，缓存均不提交到版本控制。
+
+前端依赖安装使用 `sh scripts/env.sh pnpm --dir frontend install --frozen-lockfile`，以 `frontend/pnpm-lock.yaml` 为准。增删依赖使用 `pnpm --dir frontend add <包名>` / `pnpm --dir frontend remove <包名>`，并提交更新后的清单和锁文件。
 
 构建使用本地临时签名，没有 Developer ID 公证。发布给其他 Mac 前需配置正式签名、公证和对应架构构建。
 
@@ -88,15 +90,15 @@ SHA-256 是本地完整文件指纹；因相机接口未提供源端哈希，应
 ```sh
 sh scripts/env.sh go test -race ./...
 sh scripts/env.sh go vet ./...
-sh scripts/env.sh npm --prefix frontend run typecheck
-sh scripts/env.sh npm --prefix frontend run build
+sh scripts/env.sh pnpm --dir frontend run typecheck
+sh scripts/env.sh pnpm --dir frontend run build
 ```
 
 界面测试夹具单独构建：
 
 ```sh
-sh scripts/env.sh npm --prefix frontend run qa:build
-sh scripts/env.sh npm --prefix frontend run qa:preview
+sh scripts/env.sh pnpm --dir frontend run qa:build
+sh scripts/env.sh pnpm --dir frontend run qa:preview
 ```
 
 打开 `http://127.0.0.1:34182/?fixture=connected`、`?fixture=empty`、`?fixture=error` 或 `?fixture=disconnected`。页面明确显示虚拟设备标识，所有动作只作用于内存。**这些夹具不会进入生产构建。**

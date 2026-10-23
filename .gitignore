@@ -3,6 +3,7 @@
 /.tools/
 /.worktrees/
 node_modules/
+.pnpm-store/
 
 # 应用构建产物
 /bin/
@@ -51,4 +52,4 @@ coverage.out
 .AppleDouble/
 .LSOverride
 
-# go.mod、go.sum、package-lock.json、前端 bindings 与源代码保持可跟踪。
+# go.mod、go.sum、pnpm-lock.yaml、前端 bindings 与源代码保持可跟踪。

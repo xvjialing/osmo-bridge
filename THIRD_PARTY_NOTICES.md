@@ -2,6 +2,6 @@
 
 - [KonradIT/osmosis](https://github.com/KonradIT/osmosis)：MIT，协议记录与 Action 6 媒体布局参考。许可证见 licenses/osmosis.txt。
 - [luisreysan/osmo-client](https://github.com/luisreysan/osmo-client)：MIT，DUML、蓝牙握手与数据链路实现参考。许可证见 licenses/osmo-client.txt。
-- [Wails](https://github.com/wailsapp/wails)、[TinyGo Bluetooth](https://github.com/tinygo-org/bluetooth)、React、Tailwind CSS、shadcn/ui 和 Radix 的版本锁定在 go.mod/go.sum 与 frontend/package-lock.json；遵循各自许可证。
+- [Wails](https://github.com/wailsapp/wails)、[TinyGo Bluetooth](https://github.com/tinygo-org/bluetooth)、React、Tailwind CSS、shadcn/ui 和 Radix 的版本锁定在 go.mod/go.sum 与 frontend/pnpm-lock.yaml；遵循各自许可证。
 
 本工程的 Go 协议实现参考上述 MIT 项目重写，保留对应版权与许可。映桥是独立项目，与 DJI 无隶属或背书关系。

@@ -54,6 +54,10 @@ func TestCameraSessionAndTwoStoreListing(t *testing.T) {
 					le.PutUint16(payload[4:], counter)
 					payload = append(payload, raw...)
 					send(Message{1, 2, m.Seq, 0, 0, 0x27, payload})
+					end := make([]byte, 10)
+					end[0], end[1] = 0x4a, 3
+					le.PutUint16(end[4:], counter)
+					send(Message{1, 2, m.Seq, 0, 0, 0x27, end})
 				}
 			}
 		}

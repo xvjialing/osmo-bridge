@@ -28,18 +28,21 @@ if (
   state.ssid = "TEST-OSMO";
   state.message = "测试连接已建立";
   if (scenario !== "empty")
-    state.media = Array.from({ length: 30 }, (_, i) => ({
-      id: `fixture-${i}`,
-      name: `TEST_20261022_${String(i + 1).padStart(4, "0")}.${i % 3 === 0 ? "JPG" : "MP4"}`,
-      path: `DCIM/TEST/${i}.${i % 3 === 0 ? "JPG" : "MP4"}`,
-      thumb: `MISC/THM/TEST/${i}.scr`,
-      storage: i % 2,
-      handle: i + 1,
-      size: (i + 1) * 1048576,
-      duration: i * 13,
-      kind: i % 3 === 0 ? "photo" : "video",
-      date: "2026-10-22 12:30:00",
-    }));
+    state.media = Array.from(
+      { length: scenario === "timeline-selection" ? 45 : 30 },
+      (_, i) => ({
+        id: `fixture-${i}`,
+        name: `TEST_20261022_${String(i + 1).padStart(4, "0")}.${i % 3 === 0 ? "JPG" : "MP4"}`,
+        path: `DCIM/TEST/${i}.${i % 3 === 0 ? "JPG" : "MP4"}`,
+        thumb: `MISC/THM/TEST/${i}.scr`,
+        storage: i % 2,
+        handle: i + 1,
+        size: (i + 1) * 1048576,
+        duration: i * 13,
+        kind: i % 3 === 0 ? "photo" : "video",
+        date: "2026-10-22 12:30:00",
+      }),
+    );
 }
 if (scenario === "cards" && state.media.length >= 3) {
   state.media[0].name = "TEST.JPG";
@@ -58,6 +61,19 @@ if (scenario === "timeline") {
   ];
   state.media.forEach((media, i) => {
     media.date = dates[i % dates.length];
+  });
+}
+if (scenario === "timeline-selection") {
+  // 同一天 30 项跨越两页，同时覆盖其他日期与未知日期的选择隔离。
+  state.media.forEach((media, i) => {
+    media.date =
+      i < 30
+        ? "2026-10-23 12:30:00"
+        : i < 40
+          ? "2026-10-22 12:30:00"
+          : i % 2 === 0
+            ? ""
+            : "2026-02-30 12:00:00";
   });
 }
 const logInfo: LogInfo = {

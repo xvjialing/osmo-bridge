@@ -35,6 +35,7 @@ import { SearchField } from "@/components/search-field";
 import { MediaPreview } from "@/components/media-preview";
 import { MediaCard } from "@/components/media-card";
 import { groupByCaptureDay, sortByCaptureDate } from "@/lib/media-timeline";
+import { mediaSelectionState, setMediaSelection } from "@/lib/media-selection";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
@@ -242,16 +243,22 @@ export default function App() {
       ),
     [state.media, kind, storage, query],
   );
-  const ordered = useMemo(
-    () => (layout === "timeline" ? sortByCaptureDate(filtered) : filtered),
-    [filtered, layout],
-  );
+  const ordered = useMemo(() => sortByCaptureDate(filtered), [filtered]);
   const totalPages = Math.max(1, Math.ceil(ordered.length / 24));
   const currentPage = Math.min(page, totalPages);
   const visible = ordered.slice((currentPage - 1) * 24, currentPage * 24);
-  const timelineGroups = groupByCaptureDay(visible);
-  const allSelected =
-    visible.length > 0 && visible.every((m) => selection.has(m.id));
+  const timelineDays = useMemo(
+    () =>
+      new Map(
+        groupByCaptureDay(ordered).map((group) => [group.day, group.media]),
+      ),
+    [ordered],
+  );
+  const timelineGroups = groupByCaptureDay(visible).map((group) => ({
+    ...group,
+    allMedia: timelineDays.get(group.day) ?? group.media,
+  }));
+  const pageSelection = mediaSelectionState(selection, visible);
   const selectedBytes = state.media
     .filter((m) => selection.has(m.id))
     .reduce((n, m) => n + m.size, 0);
@@ -264,14 +271,13 @@ export default function App() {
     });
   }
   function togglePage() {
-    setSelection((old) => {
-      const next = new Set(old);
-      for (const m of visible) {
-        if (allSelected) next.delete(m.id);
-        else next.add(m.id);
-      }
-      return next;
-    });
+    setSelection((old) =>
+      setMediaSelection(
+        old,
+        visible,
+        mediaSelectionState(old, visible) !== true,
+      ),
+    );
   }
   async function disconnect() {
     await perform("disconnect", async () => {
@@ -494,7 +500,6 @@ export default function App() {
                           onClick={() => {
                             if (layout === value) return;
                             setLayout(value);
-                            setPage(1);
                             libraryBody.current?.scrollTo({ top: 0 });
                           }}
                         >
@@ -727,6 +732,10 @@ export default function App() {
                       >
                         <p className="timeline-order">
                           按拍摄时间从新到旧 · 相机本地时间
+                          <br />
+                          <span id="timeline-selection-scope">
+                            按天全选包含当前筛选结果的所有分页
+                          </span>
                         </p>
                         {timelineGroups.map((group) => (
                           <section
@@ -745,6 +754,31 @@ export default function App() {
                                 )}
                               </h3>
                               <span>本页 {group.media.length} 项</span>
+                              <label className="selection-label timeline-selection">
+                                <Checkbox
+                                  checked={mediaSelectionState(
+                                    selection,
+                                    group.allMedia,
+                                  )}
+                                  aria-label={`选择${group.label}的全部素材`}
+                                  aria-describedby="timeline-selection-scope"
+                                  onCheckedChange={(checked) =>
+                                    setSelection((old) =>
+                                      setMediaSelection(
+                                        old,
+                                        group.allMedia,
+                                        checked === true,
+                                      ),
+                                    )
+                                  }
+                                />
+                                <span>
+                                  {group.day === "unknown"
+                                    ? "全选本组"
+                                    : "全选当天"}
+                                  {` · ${group.allMedia.length} 项`}
+                                </span>
+                              </label>
                             </div>
                             <div className="media-grid">
                               {group.media.map((m) => (
@@ -805,7 +839,7 @@ export default function App() {
                 <div className="library-footer">
                   <label className="selection-label">
                     <Checkbox
-                      checked={allSelected}
+                      checked={pageSelection}
                       disabled={!connected || visible.length === 0}
                       onCheckedChange={togglePage}
                       aria-label="选择当前页全部素材"

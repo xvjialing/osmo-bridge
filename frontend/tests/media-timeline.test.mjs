@@ -33,7 +33,7 @@ test("日期校验遵循相机日历，不依赖系统时区或宽松日期解�
     assert.equal(captureDate(value), null, value);
 });
 
-test("全局时间排序后分页，未知日期置后，同时间稳定，原网格顺序不变", () => {
+test("共享时间排序后分页，未知日期置后，同时间稳定，不修改相机原清单", () => {
   const media = Array.from({ length: 30 }, (_, i) =>
     item(String(i), `2026-10-${String(i + 1).padStart(2, "0")} 12:30:00`),
   );

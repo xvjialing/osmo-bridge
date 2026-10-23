@@ -398,6 +398,10 @@ textarea {
   color: var(--muted-foreground);
   font-size: 11px;
 }
+.timeline-selection {
+  margin-left: auto;
+  cursor: pointer;
+}
 .search {
   position: relative;
   flex: 1;

@@ -272,6 +272,10 @@ func (s *BridgeService) Refresh() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 	defer cancel()
 	files, warning, err := link.List(diagnostics.With(ctx, s.logs, nil))
+	if err == nil && warning != "" {
+		// 刷新作为一次整体替换；部分存储失败时不能用残缺清单覆盖已有素材。
+		err = fmt.Errorf("刷新未完成，已保留原素材列表；%s", warning)
+	}
 	if err != nil {
 		s.logs.Record("error", "media", "media.refresh_failed", "刷新素材清单失败", map[string]string{"error": err.Error()})
 	}
