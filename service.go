@@ -395,6 +395,10 @@ func (s *BridgeService) startWorkerLocked() {
 			if err == nil {
 				trace.Log("info", "transfer", "transfer.completed", "素材完整写入本地", map[string]string{"bytes": fmt.Sprint(result.Bytes), "sha256": result.SHA256})
 				current.Status = "completed"
+				current.Error = ""
+				if result.Warning != "" {
+					s.state.Warning = result.Warning
+				}
 				current.Path = result.Path
 				current.SHA256 = result.SHA256
 				current.Progress = transfer.Progress{Bytes: result.Bytes, Total: result.Bytes}

@@ -211,6 +211,11 @@ func TestDownloadUsesCameraWireFormatAndResumesOriginal(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			st, _ := os.Stat(result.Path)
+			expected, _ := time.ParseInLocation("2006-01-02 15:04:05", m.Date, time.Local)
+			if st == nil || !st.ModTime().Equal(expected) {
+				t.Fatal("续传完成后未保留相机时间")
+			}
 			data, _ := os.ReadFile(result.Path)
 			sum := sha256.Sum256(sample)
 			if !resumed.Load() || !bytes.Equal(data, sample) || result.SHA256 != hex.EncodeToString(sum[:]) {

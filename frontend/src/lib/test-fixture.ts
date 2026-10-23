@@ -41,6 +41,11 @@ if (
       date: "2026-10-22 12:30:00",
     }));
 }
+if (scenario === "cards" && state.media.length >= 3) {
+  state.media[0].name = "TEST.JPG";
+  state.media[1].name =
+    "TEST_很长的素材文件名_需要换行并保持下方信息对齐_0002.MP4";
+}
 const logInfo: LogInfo = {
   settings: { retentionDays: 7, level: "info" },
   directory: "/测试目录/OsmoBridge/logs",

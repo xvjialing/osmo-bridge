@@ -29,6 +29,10 @@ export function mediaSource(media: Media, kind: "thumbnail" | "preview") {
   ) {
     if (new URLSearchParams(location.search).get("fixture") === "preview-error")
       return "/__qa_media__/missing";
+    if (kind === "thumbnail") {
+      const index = Number(media.id.split("-").at(-1)) || 0;
+      return `/__qa_media__/thumb-${index % 3}.svg`;
+    }
     return `/__qa_media__/${kind === "preview" && media.kind === "video" ? "video.mp4" : "photo.svg"}`;
   }
   return `/camera-${kind}/${encodeURIComponent(media.id)}`;

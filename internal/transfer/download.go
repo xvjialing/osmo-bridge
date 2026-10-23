@@ -26,9 +26,10 @@ type Progress struct {
 	Speed float64 `json:"speed"`
 }
 type Result struct {
-	Path   string
-	SHA256 string
-	Bytes  int64
+	Path    string
+	SHA256  string
+	Bytes   int64
+	Warning string
 }
 
 // Client 禁止代理和跨地址重定向，确保素材只从当前相机直连读取。
@@ -246,6 +247,11 @@ func Download(ctx context.Context, client *http.Client, host, device, root strin
 	if ctx.Err() != nil {
 		return result, ctx.Err()
 	}
+	warning := ""
+	if err := SetCaptureTime(f, m.Date); err != nil {
+		warning = "原文件已完整保存，但无法保留相机拍摄时间，请查看诊断日志"
+		trace.Log("warn", "transfer", "transfer.timestamp_failed", "无法保留相机拍摄时间", map[string]string{"error": err.Error()})
+	}
 	if err = f.Close(); err != nil {
 		return result, err
 	}
@@ -255,7 +261,7 @@ func Download(ctx context.Context, client *http.Client, host, device, root strin
 	}
 	_ = r.Remove(part)
 	_ = r.Remove(meta)
-	return Result{filepath.Join(root, relative), hex.EncodeToString(hash.Sum(nil)), total}, nil
+	return Result{Path: filepath.Join(root, relative), SHA256: hex.EncodeToString(hash.Sum(nil)), Bytes: total, Warning: warning}, nil
 }
 
 func retryWait(ctx context.Context, attempt int) bool {

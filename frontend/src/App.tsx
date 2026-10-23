@@ -732,11 +732,12 @@ export default function App() {
                           <div className="media-info">
                             <button
                               className="media-name media-name-button"
+                              title={m.name}
                               onClick={(e) =>
                                 showPreview(m.id, e.currentTarget)
                               }
                             >
-                              {m.name}
+                              <span>{m.name}</span>
                             </button>
                             <div className="media-meta">
                               <span>{bytes(m.size)}</span>
@@ -744,7 +745,7 @@ export default function App() {
                                 {m.storage === 1 ? "内置存储" : "SD 卡"}
                               </span>
                             </div>
-                            <div className="text-[10px] muted mt-1">
+                            <div className="media-date">
                               {m.date || "拍摄时间未知"}
                             </div>
                           </div>
