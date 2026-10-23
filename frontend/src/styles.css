@@ -1479,13 +1479,6 @@ progress::-moz-progress-bar {
   min-width: 0;
   flex: 1;
 }
-.wifi-remember {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  font-size: 13px;
-  margin-top: 16px;
-}
 .saved-credential {
   display: flex;
   align-items: flex-start;
@@ -1513,4 +1506,95 @@ progress::-moz-progress-bar {
   outline: 2px solid var(--primary);
   outline-offset: 3px;
   border-radius: 4px;
+}
+
+.media-preview-trigger {
+  display: block;
+  width: 100%;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+}
+.media-preview-trigger:hover .media-visual {
+  filter: brightness(0.94);
+}
+.media-preview-trigger:focus-visible,
+.media-name-button:focus-visible {
+  outline: 3px solid var(--primary);
+  outline-offset: -3px;
+}
+.media-name-button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+}
+.media-name-button:hover {
+  color: var(--primary);
+}
+.media-preview-dialog {
+  width: min(1040px, calc(100vw - 32px));
+  max-width: min(1040px, calc(100vw - 32px));
+  max-height: 90vh;
+  overflow-y: auto;
+}
+.preview-title {
+  padding-right: 24px;
+  overflow-wrap: anywhere;
+}
+.preview-stage {
+  position: relative;
+  display: grid;
+  place-items: center;
+  min-height: 240px;
+  height: min(56vh, 600px);
+  background: #121821;
+  border-radius: 10px;
+  overflow: hidden;
+  color: #fff;
+}
+.preview-stage > img,
+.preview-stage > video {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  object-fit: contain;
+}
+.preview-loading {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  pointer-events: none;
+}
+.preview-error {
+  display: grid;
+  gap: 16px;
+  justify-items: center;
+  padding: 24px;
+  text-align: center;
+  max-width: 560px;
+}
+.preview-error p + p {
+  font-size: 13px;
+  color: #d0d8e5;
+}
+.preview-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+@media (max-width: 760px) {
+  .preview-footer {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .preview-stage {
+    min-height: 180px;
+  }
 }

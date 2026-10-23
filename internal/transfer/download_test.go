@@ -181,3 +181,51 @@ func TestSymlinkCannotEscapeDestination(t *testing.T) {
 		t.Fatal("写入了目标目录之外")
 	}
 }
+
+func TestDownloadUsesCameraWireFormatAndResumesOriginal(t *testing.T) {
+	for _, storage := range []int{0, 1} {
+		t.Run(fmt.Sprint(storage), func(t *testing.T) {
+			m := media()
+			m.Storage = storage
+			var resumed atomic.Bool
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				// 按真实请求字符串匹配，不能先 Query 解码而掩盖分隔符和参数顺序差异。
+				expected := fmt.Sprintf("/v2?storage=%d&path=DCIM/DJI_001/test.MP4", storage)
+				if r.RequestURI != expected {
+					http.NotFound(w, r)
+					return
+				}
+				if r.Header.Get("Range") != "bytes=0-" {
+					resumed.Store(true)
+				}
+				http.ServeContent(w, r, "test.MP4", time.Time{}, bytes.NewReader(sample))
+			}))
+			defer server.Close()
+			host, root := strings.TrimPrefix(server.URL, "http://"), t.TempDir()
+			ctx, cancel := context.WithCancel(context.Background())
+			_, err := Download(ctx, Client(), host, "camera-one", root, m, func(Progress) { cancel() })
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("暂停失败：%v", err)
+			}
+			result, err := Download(context.Background(), Client(), host, "camera-one", root, m, func(Progress) {})
+			if err != nil {
+				t.Fatal(err)
+			}
+			data, _ := os.ReadFile(result.Path)
+			sum := sha256.Sum256(sample)
+			if !resumed.Load() || !bytes.Equal(data, sample) || result.SHA256 != hex.EncodeToString(sum[:]) {
+				t.Fatal("原文件续传不完整")
+			}
+		})
+	}
+}
+
+func TestNotFoundDoesNotRetryOrSwitchStorage(t *testing.T) {
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls.Add(1); http.NotFound(w, r) }))
+	defer server.Close()
+	_, err := run(t, server, t.TempDir(), func(Progress) {})
+	if err == nil || !strings.Contains(err.Error(), "HTTP 404") || calls.Load() != 1 {
+		t.Fatalf("404 不应重复请求或切换物理存储：%v, %d", err, calls.Load())
+	}
+}

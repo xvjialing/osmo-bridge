@@ -58,8 +58,8 @@ export function GetState(): $CancellablePromise<$models.State> {
     return $Call.ByName("main.BridgeService.GetState");
 }
 
-export function JoinCameraWiFi(ssid: string, password: string, useSaved: boolean, remember: boolean): $CancellablePromise<void> {
-    return $Call.ByName("main.BridgeService.JoinCameraWiFi", ssid, password, useSaved, remember);
+export function JoinCameraWiFi(ssid: string, password: string, useSaved: boolean): $CancellablePromise<void> {
+    return $Call.ByName("main.BridgeService.JoinCameraWiFi", ssid, password, useSaved);
 }
 
 export function OpenLogDirectory(): $CancellablePromise<void> {

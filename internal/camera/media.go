@@ -29,7 +29,11 @@ func SafePath(p string) bool {
 }
 
 func MediaURL(host string, storage int, p string) string {
-	return "http://" + host + "/v2?" + url.Values{"storage": {fmt.Sprint(storage)}, "path": {p}}.Encode()
+	// 使用相机参考实现的请求布局：storage 在前，保留路径分隔符。
+	// 其余查询分隔符仍转义，避免自定义文件名注入参数；空格不用表单编码的 +。
+	escaped := strings.ReplaceAll(url.QueryEscape(p), "%2F", "/")
+	escaped = strings.ReplaceAll(escaped, "+", "%20")
+	return fmt.Sprintf("http://%s/v2?storage=%d&path=%s", host, storage, escaped)
 }
 
 // ParseManifest 以记录边界解码，避免把下一条素材的元数据归到当前素材。
@@ -85,7 +89,7 @@ func ParseManifest(b []byte, storage int) ([]Media, error) {
 			continue
 		}
 		if thumb != "" && path.Ext(thumb) == "" {
-			thumb += ".THM"
+			thumb += ".scr"
 		}
 		kind := "photo"
 		if strings.EqualFold(path.Ext(name), ".MP4") || strings.EqualFold(path.Ext(name), ".MOV") {

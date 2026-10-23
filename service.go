@@ -8,13 +8,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"strings"
 	"sync"
 	"time"
 
@@ -472,46 +470,6 @@ func (s *BridgeService) Reveal(id string) error {
 		}
 	}
 	return errors.New("请先完成下载")
-}
-
-func (s *BridgeService) serveThumbnail(w http.ResponseWriter, r *http.Request) {
-	id := strings.TrimPrefix(r.URL.Path, "/camera-thumbnail/")
-	s.mu.Lock()
-	var m camera.Media
-	ok := false
-	for _, f := range s.state.Media {
-		if f.ID == id && s.link != nil {
-			m = f
-			ok = true
-			break
-		}
-	}
-	s.mu.Unlock()
-	if !ok || m.Thumb == "" || !strings.HasPrefix(m.Thumb, "MISC/") || strings.Contains(m.Thumb, "..") {
-		http.NotFound(w, r)
-		return
-	}
-	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
-	defer cancel()
-	req, _ := http.NewRequestWithContext(ctx, "GET", camera.MediaURL("192.168.2.1", m.Storage, m.Thumb), nil)
-	resp, err := s.client.Do(req)
-	if err != nil {
-		http.NotFound(w, r)
-		return
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != 200 {
-		http.NotFound(w, r)
-		return
-	}
-	data, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
-	if err != nil || !strings.HasPrefix(http.DetectContentType(data), "image/") {
-		http.NotFound(w, r)
-		return
-	}
-	w.Header().Set("Content-Type", http.DetectContentType(data))
-	w.Header().Set("Cache-Control", "no-store")
-	_, _ = w.Write(data)
 }
 
 func (s *BridgeService) ServiceShutdown() error {

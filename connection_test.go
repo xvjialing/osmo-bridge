@@ -105,9 +105,9 @@ func prepare(t *testing.T, s *BridgeService) {
 	}
 	awaitConnection(t, s, "choosing_wifi")
 }
-func join(t *testing.T, s *BridgeService, p string, saved, remember bool, phase string) {
+func join(t *testing.T, s *BridgeService, p string, saved bool, phase string) {
 	t.Helper()
-	if e := s.JoinCameraWiFi("TestOsmo", p, saved, remember); e != nil {
+	if e := s.JoinCameraWiFi("TestOsmo", p, saved); e != nil {
 		t.Fatal(e)
 	}
 	awaitConnection(t, s, phase)
@@ -129,7 +129,7 @@ func TestPrepareOnlyScansAndNeverJoins(t *testing.T) {
 	if s.GetState().WiFiNetworks[0].SSID != "TestOsmo" {
 		t.Fatal("状态共享了可变切片")
 	}
-	if err := s.JoinCameraWiFi("not-scanned", "Password42", false, true); err == nil {
+	if err := s.JoinCameraWiFi("not-scanned", "Password42", false); err == nil {
 		t.Fatal("接受了扫描结果外的热点")
 	}
 	s.Disconnect()
@@ -137,20 +137,20 @@ func TestPrepareOnlyScansAndNeverJoins(t *testing.T) {
 		t.Fatal("尚未切网的取消操作改变了网络")
 	}
 }
-func TestFailedPasswordKeepsBLEAndDoesNotOverwriteSavedCredential(t *testing.T) {
+func TestFailedPasswordKeepsBLEAndSavesLatestCredential(t *testing.T) {
 	s, ble, pairs, restores := connectionService(t)
 	var joins atomic.Int32
 	key := credentialAccount("camera-stable-id", "TestOsmo")
 	s.credentials.Set(key, "SavedPass42")
 	s.connection.join = func(string, string) error { joins.Add(1); return errors.New("认证失败") }
 	prepare(t, s)
-	join(t, s, "WrongPass42", false, true, "waiting_wifi")
+	join(t, s, "WrongPass42", false, "waiting_wifi")
 	if ble.closed.Load() || restores.Load() != 0 || joins.Load() != 1 {
 		t.Fatal("认证失败后应等待用户处理，不能反复切网")
 	}
 	p, _ := s.credentials.Get(key)
-	if p != "SavedPass42" {
-		t.Fatal("错误密码覆盖了有效记忆")
+	if p != "WrongPass42" {
+		t.Fatal("认证失败后没有记住本次提交的密码")
 	}
 	if _, err := s.Scan(); err == nil {
 		t.Fatal("待处理会话被新扫描覆盖")
@@ -181,7 +181,7 @@ func TestRememberedPasswordReconnectAndForgetAreScoped(t *testing.T) {
 		}
 		return nil
 	}
-	join(t, s, secret, false, true, "connected")
+	join(t, s, secret, false, "connected")
 	key := credentialAccount("camera-stable-id", "TestOsmo")
 	if p, _ := s.credentials.Get(key); p != secret {
 		t.Fatal("未保存密码")
@@ -195,7 +195,7 @@ func TestRememberedPasswordReconnectAndForgetAreScoped(t *testing.T) {
 	}
 	s.Disconnect()
 	prepare(t, s)
-	join(t, s, "", true, false, "connected")
+	join(t, s, "", true, "connected")
 	s.Disconnect()
 	prepare(t, s)
 	other := credentialAccount("other-camera", "TestOsmo")
@@ -214,35 +214,82 @@ func TestRememberedPasswordReconnectAndForgetAreScoped(t *testing.T) {
 	}
 	s.Disconnect()
 }
-func TestDoNotRememberAndKeychainFailure(t *testing.T) {
-	for _, saveFailure := range []bool{false, true} {
-		t.Run(map[bool]string{false: "未勾选", true: "钥匙串失败"}[saveFailure], func(t *testing.T) {
+func TestKeychainFailureIsReportedRegardlessOfConnectionResult(t *testing.T) {
+	for _, joinFailure := range []bool{false, true} {
+		t.Run(map[bool]string{false: "连接成功", true: "认证失败"}[joinFailure], func(t *testing.T) {
 			s, _, _, _ := connectionService(t)
 			prepare(t, s)
-			if saveFailure {
-				s.credentials.(*memoryCredentials).saveError = errors.New("拒绝访问")
+			s.credentials.(*memoryCredentials).saveError = errors.New("拒绝访问")
+			phase := "connected"
+			if joinFailure {
+				phase = "waiting_wifi"
+				s.connection.join = func(string, string) error { return errors.New("认证失败") }
 			}
-			join(t, s, "ManualPass42", false, saveFailure, "connected")
+			join(t, s, "ManualPass42", false, phase)
 			if ok, _ := s.credentials.Has(credentialAccount("camera-stable-id", "TestOsmo")); ok {
-				t.Fatal("不应保存密码")
+				t.Fatal("钥匙串写入失败却记录为已保存")
 			}
-			if saveFailure && !strings.Contains(s.GetState().Warning, "密码未能记住") {
-				t.Fatal("未告知记忆失败")
+			if s.GetState().WiFiNetworks[0].HasSavedPassword || !strings.Contains(s.GetState().Warning, "密码未能记住") {
+				t.Fatal("未准确反馈密码保存失败")
 			}
 			s.Disconnect()
 		})
 	}
 }
+func TestFailedFirstAttemptSavesBeforeJoinAndReusesPassword(t *testing.T) {
+	s, _, _, _ := connectionService(t)
+	prepare(t, s)
+	secret := " NewPass42 "
+	key := credentialAccount("camera-stable-id", "TestOsmo")
+	s.connection.join = func(_ string, password string) error {
+		stored, err := s.credentials.Get(key)
+		if err != nil || stored != secret || password != secret {
+			t.Error("加入热点前未保存本次提交的完整密码")
+		}
+		return errors.New("认证失败")
+	}
+	join(t, s, secret, false, "waiting_wifi")
+	if !s.GetState().WiFiNetworks[0].HasSavedPassword {
+		t.Fatal("首次认证失败后没有更新已记住状态")
+	}
+	raw, _ := json.Marshal(s.GetState())
+	config, _ := os.ReadFile(s.configFile)
+	page, _ := s.ReadLogs(diagnostics.Query{Limit: 100})
+	logs, _ := json.Marshal(page)
+	if strings.Contains(string(raw)+string(config)+string(logs), secret) {
+		t.Fatal("失败连接的密码进入状态、配置或日志")
+	}
+	s.Disconnect()
+	prepare(t, s)
+	if !s.GetState().WiFiNetworks[0].HasSavedPassword {
+		t.Fatal("重新配对后丢失已记住状态")
+	}
+	join(t, s, "", true, "waiting_wifi")
+	s.Disconnect()
+}
+func TestInvalidPasswordDoesNotReplaceSavedCredential(t *testing.T) {
+	s, _, _, _ := connectionService(t)
+	prepare(t, s)
+	key := credentialAccount("camera-stable-id", "TestOsmo")
+	s.credentials.Set(key, "SavedPass42")
+	if err := s.JoinCameraWiFi("TestOsmo", "short", false); err == nil {
+		t.Fatal("接受了格式无效的密码")
+	}
+	if password, _ := s.credentials.Get(key); password != "SavedPass42" {
+		t.Fatal("格式无效的密码覆盖了已记住的密码")
+	}
+	s.Disconnect()
+}
 func TestMissingSavedPasswordAllowsManualRetry(t *testing.T) {
 	s, ble, _, _ := connectionService(t)
 	prepare(t, s)
 	s.connection.join = func(string, string) error { t.Error("缺失密码时进行了认证"); return nil }
-	join(t, s, "", true, true, "waiting_wifi")
+	join(t, s, "", true, "waiting_wifi")
 	if ble.closed.Load() {
 		t.Fatal("读取钥匙串失败不应关闭蓝牙")
 	}
 	s.connection.join = func(string, string) error { return nil }
-	join(t, s, "ManualPass42", false, false, "connected")
+	join(t, s, "ManualPass42", false, "connected")
 	s.Disconnect()
 }
 func TestMediaFailureRetainsWiFiAndValidPassword(t *testing.T) {
@@ -251,7 +298,7 @@ func TestMediaFailureRetainsWiFiAndValidPassword(t *testing.T) {
 	s.connection.open = func(context.Context, string, string) (mediaConnection, error) {
 		return nil, errors.New("UDP 未响应")
 	}
-	join(t, s, "ManualPass42", false, true, "connection_error")
+	join(t, s, "ManualPass42", false, "connection_error")
 	if ble.closed.Load() || restores.Load() != 0 {
 		t.Fatal("素材握手失败不应切回公网")
 	}
@@ -263,7 +310,7 @@ func TestMediaFailureRetainsWiFiAndValidPassword(t *testing.T) {
 		t.Fatal("主动取消未恢复网络")
 	}
 }
-func TestDHCPFailureDoesNotOpenMediaOrSavePassword(t *testing.T) {
+func TestDHCPFailureKeepsPasswordWithoutOpeningMedia(t *testing.T) {
 	s, ble, _, restores := connectionService(t)
 	prepare(t, s)
 	s.connection.waitReady = func(context.Context, string) error { return errors.New("网络地址尚未就绪") }
@@ -271,12 +318,12 @@ func TestDHCPFailureDoesNotOpenMediaOrSavePassword(t *testing.T) {
 		t.Error("地址未就绪就打开媒体")
 		return &fakeMedia{}, nil
 	}
-	join(t, s, "ManualPass42", false, true, "waiting_wifi")
+	join(t, s, "ManualPass42", false, "waiting_wifi")
 	if ble.closed.Load() || restores.Load() != 0 {
 		t.Fatal("应保留会话")
 	}
-	if ok, _ := s.credentials.Has(credentialAccount("camera-stable-id", "TestOsmo")); ok {
-		t.Fatal("未就绪就保存密码")
+	if ok, _ := s.credentials.Has(credentialAccount("camera-stable-id", "TestOsmo")); !ok {
+		t.Fatal("DHCP 失败后没有保留密码")
 	}
 	s.Disconnect()
 }
@@ -285,7 +332,7 @@ func TestCancelWhileWaitingForAddressCleansUpOnce(t *testing.T) {
 	prepare(t, s)
 	started := make(chan struct{})
 	s.connection.waitReady = func(ctx context.Context, _ string) error { close(started); <-ctx.Done(); return ctx.Err() }
-	if err := s.JoinCameraWiFi("TestOsmo", "ManualPass42", false, true); err != nil {
+	if err := s.JoinCameraWiFi("TestOsmo", "ManualPass42", false); err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -298,8 +345,8 @@ func TestCancelWhileWaitingForAddressCleansUpOnce(t *testing.T) {
 	if !ble.closed.Load() || restores.Load() != 1 {
 		t.Fatal("取消清理缺失或重复")
 	}
-	if ok, _ := s.credentials.Has(credentialAccount("camera-stable-id", "TestOsmo")); ok {
-		t.Fatal("取消后仍保存密码")
+	if ok, _ := s.credentials.Has(credentialAccount("camera-stable-id", "TestOsmo")); !ok {
+		t.Fatal("取消连接不应清除已提交的密码")
 	}
 }
 func TestScanWithoutBluetoothHintAndRefreshFailure(t *testing.T) {
@@ -319,7 +366,7 @@ func TestScanWithoutBluetoothHintAndRefreshFailure(t *testing.T) {
 	if len(s.GetState().WiFiNetworks) != 0 {
 		t.Fatal("刷新失败后仍允许连接过时的扫描结果")
 	}
-	if e := s.JoinCameraWiFi("TestOsmo", "ManualPass42", false, true); e == nil {
+	if e := s.JoinCameraWiFi("TestOsmo", "ManualPass42", false); e == nil {
 		t.Fatal("接受了过时热点")
 	}
 	s.Disconnect()

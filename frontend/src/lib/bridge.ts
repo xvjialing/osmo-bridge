@@ -21,6 +21,18 @@ export interface Task {
   path: string;
   sha256: string;
 }
+
+export function mediaSource(media: Media, kind: "thumbnail" | "preview") {
+  if (
+    import.meta.env.MODE === "test" &&
+    new URLSearchParams(location.search).has("fixture")
+  ) {
+    if (new URLSearchParams(location.search).get("fixture") === "preview-error")
+      return "/__qa_media__/missing";
+    return `/__qa_media__/${kind === "preview" && media.kind === "video" ? "video.mp4" : "photo.svg"}`;
+  }
+  return `/camera-${kind}/${encodeURIComponent(media.id)}`;
+}
 export interface WiFiCandidate {
   ssid: string;
   rssi: number;

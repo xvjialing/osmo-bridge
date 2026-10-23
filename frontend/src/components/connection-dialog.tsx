@@ -15,7 +15,6 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
   DialogContent,
@@ -54,7 +53,6 @@ export function ConnectionDialog({
   const [password, setPassword] = useState("");
   const [visible, setVisible] = useState(false);
   const [useSaved, setUseSaved] = useState(false);
-  const [remember, setRemember] = useState(true);
   const [fieldError, setFieldError] = useState("");
   const passwordInput = useRef<HTMLInputElement>(null);
   const candidate = state.wifiNetworks.find((n) => n.ssid === selected);
@@ -119,7 +117,6 @@ export function ConnectionDialog({
     setUseSaved(hasSaved);
     setPassword("");
     setVisible(false);
-    setRemember(true);
     setFieldError("");
     setError("");
     setNotice("");
@@ -142,13 +139,10 @@ export function ConnectionDialog({
     setVisible(false);
     const entered = password;
     setPassword("");
-    await run(
-      "JoinCameraWiFi",
-      candidate.ssid,
-      saved ? "" : entered,
-      saved,
-      remember,
-    );
+    if (
+      await run("JoinCameraWiFi", candidate.ssid, saved ? "" : entered, saved)
+    )
+      setUseSaved(true);
   }
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -389,20 +383,10 @@ export function ConnectionDialog({
                   相机屏幕下拉 → 系统设置 → 无线连接 →
                   无线信息。请输入这里显示的密码。
                 </p>
-                <label className="wifi-remember">
-                  <Checkbox
-                    checked={remember}
-                    disabled={busy}
-                    onCheckedChange={(v) => setRemember(v === true)}
-                  />
-                  {candidate.hasSavedPassword
-                    ? "连接成功后更新已记住的密码"
-                    : "在这台 Mac 上记住密码"}
-                </label>
                 <p className="text-xs muted mt-2">
-                  仅存入 macOS 钥匙串，不写入日志或普通配置。
-                  {candidate.hasSavedPassword &&
-                    "取消勾选会保留原来记住的密码。"}
+                  提交后会在这台 Mac
+                  上记住本次密码，无论连接是否成功，下次可直接使用。
+                  密码仅存入本机钥匙串。
                 </p>
               </div>
             )}

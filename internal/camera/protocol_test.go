@@ -77,6 +77,9 @@ func TestManifestRecordIsolationAndStorage(t *testing.T) {
 	if files[0].Storage != 1 || files[0].Path != "DCIM/CUSTOM_001/ONE.MP4" {
 		t.Fatal(files[0])
 	}
+	if files[0].Thumb != "MISC/THM/CUSTOM_001/ONE.scr" || files[1].Thumb != "MISC/THM/CUSTOM_001/TWO.scr" {
+		t.Fatalf("缩略图路径扩展名错误：%+v", files)
+	}
 	sd, _ := ParseManifest(manifestRecord("ONE.MP4", 0, 987654), 0)
 	if sd[0].ID == files[0].ID {
 		t.Fatal("不同存储不能共用素材 ID")
@@ -104,4 +107,20 @@ func FuzzFrameReader(f *testing.F) {
 			}
 		}
 	})
+}
+
+// 固定 HTTP 请求布局对应 Action 6 路径式读取协议，而非解码后的 Query 映射。
+func TestCameraMediaURLWireFormat(t *testing.T) {
+	for _, tc := range []struct {
+		storage    int
+		path, want string
+	}{
+		{1, "DCIM/DJI_001/DJI_20261021131408_0086_D.MP4", "http://192.168.2.1/v2?storage=1&path=DCIM/DJI_001/DJI_20261021131408_0086_D.MP4"},
+		{0, "MISC/THM/DJI_001/test.scr", "http://192.168.2.1/v2?storage=0&path=MISC/THM/DJI_001/test.scr"},
+		{1, "DCIM/a b+&x?#%.JPG", "http://192.168.2.1/v2?storage=1&path=DCIM/a%20b%2B%26x%3F%23%25.JPG"},
+	} {
+		if got := MediaURL("192.168.2.1", tc.storage, tc.path); got != tc.want {
+			t.Fatalf("HTTP 请求布局错误：%q", got)
+		}
+	}
 }

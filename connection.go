@@ -278,7 +278,7 @@ func (s *BridgeService) candidateLocked(ssid string) (WiFiCandidate, error) {
 	return WiFiCandidate{}, errors.New("该热点已不在本次扫描结果中，请重新扫描并选择")
 }
 
-func (s *BridgeService) JoinCameraWiFi(ssid, password string, useSaved, remember bool) error {
+func (s *BridgeService) JoinCameraWiFi(ssid, password string, useSaved bool) error {
 	if !s.op.TryLock() {
 		return errors.New("正在处理连接，请稍候")
 	}
@@ -298,6 +298,7 @@ func (s *BridgeService) JoinCameraWiFi(ssid, password string, useSaved, remember
 	s.state.SSID = ssid
 	s.mu.Unlock()
 	s.runConnection("connecting", func(ctx context.Context) error {
+		defer func() { password = "" }()
 		if useSaved {
 			var err error
 			password, err = s.credentials.Get(account)
@@ -308,6 +309,25 @@ func (s *BridgeService) JoinCameraWiFi(ssid, password string, useSaved, remember
 		}
 		if err := validatePassword(password); err != nil {
 			return &connectionIssue{"waiting_wifi", err}
+		}
+		trace := diagnostics.From(ctx)
+		// 先记住用户本次提交的密码，认证、DHCP 或素材会话失败均不撤销保存。
+		if !useSaved {
+			if err := s.credentials.Set(account, password); err != nil {
+				s.mu.Lock()
+				s.state.Warning = "本次密码未能记住，下次可能需要重新输入：" + err.Error()
+				s.mu.Unlock()
+				trace.Log("warn", "wifi", "wifi.credential_save_failed", "密码保存至钥匙串失败", map[string]string{"error": err.Error()})
+			} else {
+				s.mu.Lock()
+				for i := range s.state.WiFiNetworks {
+					if s.state.WiFiNetworks[i].SSID == ssid {
+						s.state.WiFiNetworks[i].HasSavedPassword = true
+					}
+				}
+				s.mu.Unlock()
+				trace.Log("info", "wifi", "wifi.credential_saved", "已在本机钥匙串记住本次提交的相机热点密码", nil)
+			}
 		}
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -321,7 +341,6 @@ func (s *BridgeService) JoinCameraWiFi(ssid, password string, useSaved, remember
 		s.logs.RegisterSecrets(current)
 		s.mu.Unlock()
 		s.connectionStage(ctx, "正在加入选定热点，Wi-Fi 互联网连接可能暂时中断")
-		trace := diagnostics.From(ctx)
 		trace.Log("info", "wifi", "wifi.join_attempt", "用户已确认，开始加入选定热点", map[string]string{"saved_credential": fmt.Sprint(useSaved)})
 		err := s.connection.join(ssid, password)
 		// 即使系统调用报告失败，也保留已经切换的网络，直到用户主动取消。
@@ -344,24 +363,6 @@ func (s *BridgeService) JoinCameraWiFi(ssid, password string, useSaved, remember
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		if remember && !useSaved {
-			if err := s.credentials.Set(account, password); err != nil {
-				s.mu.Lock()
-				s.state.Warning = "热点已连接，但密码未能记住：" + err.Error()
-				s.mu.Unlock()
-				trace.Log("warn", "wifi", "wifi.credential_save_failed", "密码保存至钥匙串失败，下次需重新输入", map[string]string{"error": err.Error()})
-			} else {
-				s.mu.Lock()
-				for i := range s.state.WiFiNetworks {
-					if s.state.WiFiNetworks[i].SSID == ssid {
-						s.state.WiFiNetworks[i].HasSavedPassword = true
-					}
-				}
-				s.mu.Unlock()
-				trace.Log("info", "wifi", "wifi.credential_saved", "已在本机钥匙串记住该相机热点密码", nil)
-			}
-		}
-		password = ""
 		return s.openMedia(ctx)
 	})
 	return nil

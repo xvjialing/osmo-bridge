@@ -31,6 +31,7 @@ import { Button } from "@/components/ui/button";
 import { ConnectionDialog } from "@/components/connection-dialog";
 import { SettingsPage } from "@/components/settings-page";
 import { SearchField } from "@/components/search-field";
+import { MediaPreview } from "@/components/media-preview";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
@@ -45,6 +46,7 @@ import {
   duration,
   emptyState,
   errorMessage,
+  mediaSource,
   type Media,
   type State,
   type Task,
@@ -66,7 +68,7 @@ function Thumbnail({ media }: { media: Media }) {
         <img
           loading="lazy"
           alt=""
-          src={`/camera-thumbnail/${media.id}`}
+          src={mediaSource(media, "thumbnail")}
           onError={() => setFailed(true)}
         />
       ) : media.kind === "video" ? (
@@ -144,6 +146,13 @@ export default function App() {
   );
   const [connectionOpen, setConnectionOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
+  const [previewID, setPreviewID] = useState("");
+  const [thumbnailRevision, setThumbnailRevision] = useState(0);
+  const previewFocus = useRef<HTMLElement | null>(null);
+  function showPreview(id: string, trigger: HTMLElement) {
+    previewFocus.current = trigger;
+    setPreviewID(id);
+  }
   const [action, setAction] = useState("");
   const [error, setError] = useState("");
   const [feedback, setFeedback] = useState("");
@@ -207,6 +216,7 @@ export default function App() {
           setConnectionOpen(false);
           setSelection(new Set());
           setFeedback("相机已连接，可以选择素材导入");
+          setThumbnailRevision((n) => n + 1);
         }
         if (
           next.phase === "disconnected" &&
@@ -214,6 +224,7 @@ export default function App() {
         )
           setSelection(new Set());
         previousPhase.current = next.phase;
+        if (next.phase !== "connected") setPreviewID("");
       } catch (e) {
         if (!stopped) setError(errorMessage(e));
       } finally {
@@ -487,6 +498,7 @@ export default function App() {
                     onClick={() =>
                       void perform("refresh", async () => {
                         await call("Refresh");
+                        setThumbnailRevision((n) => n + 1);
                         setSelection(new Set());
                         setPage(1);
                       })
@@ -700,7 +712,16 @@ export default function App() {
                           key={m.id}
                           className={`media-card ${selection.has(m.id) ? "selected" : ""}`}
                         >
-                          <Thumbnail media={m} />
+                          <button
+                            className="media-preview-trigger"
+                            aria-label={`预览 ${m.name}`}
+                            onClick={(e) => showPreview(m.id, e.currentTarget)}
+                          >
+                            <Thumbnail
+                              key={`${m.id}-${thumbnailRevision}`}
+                              media={m}
+                            />
+                          </button>
                           <div className="media-check">
                             <Checkbox
                               checked={selection.has(m.id)}
@@ -709,7 +730,14 @@ export default function App() {
                             />
                           </div>
                           <div className="media-info">
-                            <div className="media-name">{m.name}</div>
+                            <button
+                              className="media-name media-name-button"
+                              onClick={(e) =>
+                                showPreview(m.id, e.currentTarget)
+                              }
+                            >
+                              {m.name}
+                            </button>
                             <div className="media-meta">
                               <span>{bytes(m.size)}</span>
                               <span>
@@ -922,6 +950,15 @@ export default function App() {
           }
         }}
       />
+      <MediaPreview
+        media={
+          connected
+            ? (state.media.find((m) => m.id === previewID) ?? null)
+            : null
+        }
+        onClose={() => setPreviewID("")}
+        returnFocus={previewFocus}
+      />
       <Dialog open={helpOpen} onOpenChange={setHelpOpen}>
         <DialogContent
           onCloseAutoFocus={(e) => {
@@ -942,8 +979,13 @@ export default function App() {
             <li>
               在扫描出的 Wi-Fi 列表中选定相机热点，输入相机「系统设置 → 无线连接
               → 无线信息」中的密码。
-              勾选记住后，认证成功会存入本机钥匙串，下次可直接使用。也可通过系统
-              Wi-Fi 菜单连接后接续。
+              提交后会自动存入本机钥匙串，下次可直接使用。也可通过系统 Wi-Fi
+              菜单连接后接续。
+            </li>
+            <li>
+              Wi-Fi 的 IPv4 请使用 DHCP。若原网络配置了固定
+              IP，先记下原配置，再到系统设置 → Wi-Fi → 详细信息 → TCP/IP
+              切换；返回原网络时按需恢复。
             </li>
           </ol>
           <p className="text-xs muted mt-3">

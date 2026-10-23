@@ -31,8 +31,8 @@ if (
     state.media = Array.from({ length: 30 }, (_, i) => ({
       id: `fixture-${i}`,
       name: `TEST_20261022_${String(i + 1).padStart(4, "0")}.${i % 3 === 0 ? "JPG" : "MP4"}`,
-      path: `DCIM/TEST/${i}.MP4`,
-      thumb: "",
+      path: `DCIM/TEST/${i}.${i % 3 === 0 ? "JPG" : "MP4"}`,
+      thumb: `MISC/THM/TEST/${i}.scr`,
       storage: i % 2,
       handle: i + 1,
       size: (i + 1) * 1048576,
@@ -88,8 +88,10 @@ if (scenario === "waiting-wifi" || scenario === "connection-error") {
       : "热点已就绪，素材握手未响应";
 }
 
-const rememberedNetworks = new Set<string>(
-  scenario === "wifi-saved" ? ["TEST-OsmoAction6-ABCD"] : [],
+const rememberedNetworks = new Map<string, string>(
+  scenario === "wifi-saved"
+    ? [["TEST-OsmoAction6-ABCD", "FixtureSaved42"]]
+    : [],
 );
 let connectionGeneration = 0;
 function fixtureNetworks(): WiFiCandidate[] {
@@ -230,18 +232,27 @@ export async function fixtureCall(method: Method, args: unknown[]) {
     state.phase = "connecting";
     state.busy = true;
     state.message = "测试：正在认证热点并等待网络地址";
-    if (method === "JoinCameraWiFi") state.ssid = args[0] as string;
+    let submittedPassword = "";
+    if (method === "JoinCameraWiFi") {
+      state.ssid = args[0] as string;
+      submittedPassword = args[2]
+        ? (rememberedNetworks.get(state.ssid) ?? "")
+        : (args[1] as string);
+      if (!args[2]) {
+        rememberedNetworks.set(state.ssid, submittedPassword);
+        state.wifiNetworks = fixtureNetworks();
+      }
+    }
     setTimeout(() => {
       if (generation !== connectionGeneration) return;
       state.busy = false;
-      if (method === "JoinCameraWiFi" && args[1] === "FixtureWrong42") {
+      if (
+        method === "JoinCameraWiFi" &&
+        submittedPassword === "FixtureWrong42"
+      ) {
         state.phase = "waiting_wifi";
         state.message = "测试：热点认证失败，请核对密码";
         return;
-      }
-      if (method === "JoinCameraWiFi" && args[3]) {
-        rememberedNetworks.add(args[0] as string);
-        state.wifiNetworks = fixtureNetworks();
       }
       state.phase = "connected";
       state.message = "测试：已建立素材会话";

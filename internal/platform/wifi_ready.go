@@ -33,7 +33,7 @@ func cameraNetworkReady(snapshot WiFiSnapshot, expected string) (bool, string) {
 			return true, ""
 		}
 	}
-	return false, "Mac 尚未获得相机网段的 IPv4 地址，请等待热点连接完成后继续"
+	return false, "Mac 尚未获得相机网段的 IPv4 地址。如果已连接相机热点，请到系统设置 → Wi-Fi → 详细信息 → TCP/IP，将配置 IPv4 设为“使用 DHCP”后重试；如原网络使用固定 IP，请先记下原配置，切回原网络时恢复"
 }
 
 func waitCameraNetwork(ctx context.Context, expected string, inspect func() WiFiSnapshot, interval time.Duration) error {

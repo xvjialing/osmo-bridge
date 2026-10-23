@@ -3,6 +3,7 @@ package platform
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 )
@@ -27,6 +28,17 @@ func TestCameraNetworkReadiness(t *testing.T) {
 				t.Fatal("网络就绪状态错误")
 			}
 		})
+	}
+}
+
+func TestAddressTimeoutExplainsDHCPAndPreservesManualSettings(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Millisecond)
+	defer cancel()
+	err := waitCameraNetwork(ctx, "Camera", func() WiFiSnapshot {
+		return WiFiSnapshot{"Camera", "en1", []string{"192.168.5.22/24"}}
+	}, time.Millisecond)
+	if err == nil || !strings.Contains(err.Error(), "DHCP") || !strings.Contains(err.Error(), "先记下原配置") {
+		t.Fatalf("缺少固定 IP 恢复指引：%v", err)
 	}
 }
 

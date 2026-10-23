@@ -25,6 +25,10 @@ func main() {
 			service.serveThumbnail(w, r)
 			return
 		}
+		if strings.HasPrefix(r.URL.Path, "/camera-preview/") {
+			service.servePreview(w, r)
+			return
+		}
 		files.ServeHTTP(w, r)
 	})}, Mac: application.MacOptions{ActivationPolicy: application.ActivationPolicyRegular, ApplicationShouldTerminateAfterLastWindowClosed: true}})
 	service.app = app

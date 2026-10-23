@@ -132,8 +132,11 @@ func Download(ctx context.Context, client *http.Client, host, device, root strin
 		if resp.StatusCode != 200 && resp.StatusCode != 206 {
 			resp.Body.Close()
 			lastErr = fmt.Errorf("相机返回 HTTP %d", resp.StatusCode)
+			if resp.StatusCode == http.StatusNotFound {
+				lastErr = errors.New("相机未找到原文件（HTTP 404），请刷新素材列表后重试；此错误发生在文件读取阶段")
+			}
 			trace.Log("warn", "transfer", "http.status_error", "相机返回错误状态", map[string]string{"status": fmt.Sprint(resp.StatusCode), "attempt": fmt.Sprint(attempt + 1)})
-			if resp.StatusCode != 404 && resp.StatusCode < 500 {
+			if resp.StatusCode < 500 {
 				return result, lastErr
 			}
 			if !retryWait(ctx, attempt) {

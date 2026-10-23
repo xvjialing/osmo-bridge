@@ -30,7 +30,7 @@ func credentialError(code C.int) error {
 		return ErrCredentialMissing
 	}
 	if code == 100001 {
-		return errors.New("当前运行环境禁止访问钥匙串，请在正常启动的映桥应用中检查权限；也可不记住密码继续连接（错误码 100001）")
+		return errors.New("当前运行环境禁止访问钥匙串，请在正常启动的映桥应用中检查权限（错误码 100001）")
 	}
 	return fmt.Errorf("无法访问 macOS 钥匙串（错误码 %d），请检查钥匙串是否已解锁或改为手动输入", int(code))
 }
